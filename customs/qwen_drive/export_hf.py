@@ -33,6 +33,17 @@ CHECKPOINT_FILES = (
 )
 PLANNERS = ("planner-sft", "planner-rl")
 
+# transformers resolves the video processor from the dir's model_type (`qwen_drive`, unknown), so name it explicitly.
+VIDEO_PREPROCESSOR = {
+    "video_processor_type": "Qwen3VLVideoProcessor",
+    "patch_size": 16,
+    "temporal_patch_size": 2,
+    "merge_size": 2,
+    "image_mean": [0.5, 0.5, 0.5],
+    "image_std": [0.5, 0.5, 0.5],
+    "size": {"longest_edge": 25165824, "shortest_edge": 4096},
+}
+
 RESOLVE_HELPER = '''
 
 def _resolve_planner(planner: str | Path, base: str | Path | None) -> Path:
@@ -129,6 +140,7 @@ def main() -> None:
         "AutoModelForImageTextToText": "modeling_qwen_drive.QwenDriveForPlanning",
     }
     (args.out / "config.json").write_text(json.dumps(config, indent=2) + "\n")
+    (args.out / "video_preprocessor_config.json").write_text(json.dumps(VIDEO_PREPROCESSOR, indent=2) + "\n")
 
     readme = (args.ckpt / "README.md").read_text()
     marker = "# Qwen-Drive-1.0-4B\n"

@@ -231,6 +231,11 @@ _DIFFUSION_MODELS = {
         "pipeline_pi0",
         "Pi0Pipeline",
     ),
+    "QwenDrivePlannerPipeline": (
+        "qwen_drive",
+        "pipeline_qwen_drive",
+        "QwenDrivePlannerPipeline",
+    ),
     "Pi05Pipeline": (
         "pi05",
         "pipeline_pi05",
@@ -425,6 +430,7 @@ _NO_CACHE_ACCELERATION = {
     # instead of erroring.
     "Pi0Pipeline",
     "Pi05Pipeline",
+    "QwenDrivePlannerPipeline",
     "LingBotWorldCausalDMDPipeline",
 }
 
@@ -685,6 +691,7 @@ _DIFFUSION_POST_PROCESS_FUNCS = {
     "InternVLAA1Pipeline": "get_internvla_a1_post_process_func",
     "Pi0Pipeline": "get_pi0_post_process_func",
     "Pi05Pipeline": "get_pi05_post_process_func",
+    "QwenDrivePlannerPipeline": "get_qwen_drive_post_process_func",
     "LongCatImageEditPipeline": "get_longcat_image_post_process_func",
     "StableDiffusion3Pipeline": "get_sd3_image_post_process_func",
     "FluxKontextPipeline": "get_flux_kontext_post_process_func",

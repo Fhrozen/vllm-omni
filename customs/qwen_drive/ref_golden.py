@@ -87,6 +87,8 @@ def generate(args) -> None:
         direct_inputs = to_device(processor(scene, with_reasoning=False, device="cpu"), model.device)
         np.save(out / f"prompt_ids_{i}_direct.npy", direct_inputs["input_ids"].cpu().numpy())
         np.save(out / f"image_grid_thw_{i}.npy", direct_inputs["image_grid_thw"].cpu().numpy())
+        planner_keys = ("history", "history_velocity", "history_acceleration", "ego_status", "nav_command")
+        np.savez(out / f"planner_inputs_{i}.npz", **{k: direct_inputs[k].cpu().numpy() for k in planner_keys})
         cache, anchor = model._prefill(direct_inputs)
         save_cache(kv_out / f"scene_{i}_direct.pt", cache, anchor)
         info["seq_len_direct"] = int(direct_inputs["input_ids"].shape[1])
