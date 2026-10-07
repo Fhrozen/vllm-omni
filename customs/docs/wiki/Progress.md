@@ -4,7 +4,7 @@ Update this file at the end of every episode. Status: `todo` | `in-progress` | `
 
 | ID | Status | Notes / outputs |
 |----|--------|-----------------|
-| E0 | done | wiki + `customs/qwen_drive/{docker_run,setup_env,env_check}.sh`; `run_ref_baseline/run_unit_tests/run_e2e_test/export_hf` stubs still to be created by their episodes |
+| E0 | done | wiki + `customs/qwen_drive/{docker_run,setup_env,env_check}.sh`; the other scripts were added by their episodes (all present) |
 | E1 | done | vllm 0.31.0, transformers 5.14.1, torch 2.13.0+cu132; `Qwen3_5ForConditionalGeneration` registered in vllm; `qwen_drive` reference installed (--no-deps). flash_attn/fla/causal_conv1d NOT installed (HF reference falls back to torch GDN, slow). |
 | E2 | done | `customs/qwen_drive/{ref_golden.py,run_ref_baseline.sh}`; golden in `customs/docs/golden/` (3 scenes, 6 samples, seed 42, sdpa bf16), K/V in `extra_repos/golden_kv/` (638 MB, git-ignored); two runs bit-identical |
 | E3 | done | `customs/qwen_drive/{export_hf.py,export_hf.sh,verify_hf_export.py}`; `extra_repos/Qwen-Drive-1.0-4B-hf`; remote-code load matches golden bit-for-bit; see HF-Export.md |
@@ -14,7 +14,7 @@ Update this file at the end of every episode. Status: `todo` | `in-progress` | `
 | E7 | done | `model_executor/models/qwen_drive/pipeline.py`, `model_executor/stage_input_processors/qwen_drive.py` (`vlm_to_prefill`), `config/pipeline_registry.py`, `deploy/qwen_drive.yaml` (bf16) and `deploy/qwen_drive_fp8.yaml`; `customs/qwen_drive/{e2e_offline.py,run_e2e_offline.sh}`: 6/6 (3 scenes x direct/reasoning) ADE vs golden 0.03-0.055 m with fp8. BF16 yaml not run yet (needs ~24 GB total) |
 | E8 | done | `customs/qwen_drive/{client_example.py,chat_template_drive.jinja,serve.sh}`; `trajectory` response field (`protocol/chat_completion.py`) + branch in `serving_chat.py`; stage 1->2 bridge `prefill_to_planner`; export ships the chat template. Verified live: direct/reasoning/VQA over HTTP, ADE vs golden identical to offline (0.045/0.055 m scene 1) |
 | E9 | done | `tests/e2e/online_serving/test_qwen_drive.py` (7 tests pass, FP8), `customs/qwen_drive/{run_e2e_test.sh,run_unit_tests.sh}`; Testing.md, Usage.md written |
-| E10 | partial | ruff check/format clean on all changed files; remaining: BF16 run on the larger GPU (`qwen_drive.yaml`), concurrency/abort tests, prefix-cache-free double prefill cost, streaming, wiki Architecture refresh |
+| E10 | done | ruff clean; online suite grew to 11 tests (concurrency x5, client abort, VQA streaming, planner-sft) all passing; BF16 measured with `customs/qwen_drive/deploy_bf16_16gb.yaml` (fits 2x16 GB: 1 seq, 5000 ctx); noise floor measured (`spikes/noise_floor.py`); Architecture/Usage/Testing/Risks refreshed |
 
 ## Commands run (reproducible)
 - E1: `customs/qwen_drive/setup_env.sh` then `customs/qwen_drive/env_check.sh`.
@@ -27,4 +27,4 @@ Update this file at the end of every episode. Status: `todo` | `in-progress` | `
 - E6: `customs/qwen_drive/run_unit_tests.sh` (GPU 0; add `-k pipeline_forward` for the pipeline-contract test).
 
 ## Next
-On the larger-VRAM machine: `QD_DEPLOY=/workspace/vllm_omni/deploy/qwen_drive.yaml QD_MAX_ADE=0.02 customs/qwen_drive/run_e2e_test.sh` (adjust `devices`/`gpu_memory_utilization` in the yaml first). Open items: concurrency/abort handling, streaming of the trajectory field, `planner-sft` e2e, throughput numbers (see Risks.md).
+All episodes done. Optional follow-ups: streaming of the `trajectory` field, throughput benchmarks with larger `max_num_seqs` on the big-VRAM machine (`vllm_omni/deploy/qwen_drive.yaml`), CI wiring (Buildkite) if wanted.

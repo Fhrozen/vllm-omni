@@ -11,6 +11,6 @@
 | R7 | Blackwell sm_120 kernels (FA, GDN) availability in vllm 0.31 | verify in E5; fall back to SDPA/triton |
 | R8 | HF dynamic-module loading of sibling files and nested `AutoConfig` sub_configs | E3 test in a venv without `qwen_drive` |
 | R9 | Cross-GPU KV transfer via shared memory (CPU) latency, ~140 MB per 4.3k-token scene | measure in E10 |
-| R10 | Streaming responses do not carry the `trajectory` field | non-streaming only (documented in Usage.md) |
-| R11 | No concurrency/abort testing yet (stage 1 and planner use `max_num_seqs` 2/1) | E10 follow-up |
-| R12 | BF16 numbers not measured (only FP8 on 16 GB) | run `qwen_drive.yaml` on the larger machine (Testing.md) |
+| R10 | Streaming responses do not carry the `trajectory` field | open by design; non-streaming only (Usage.md); VQA streaming tested |
+| R11 | Concurrency/abort behavior | closed: 5 concurrent requests and a client abort tested (E10) |
+| R12 | BF16 numbers | closed: measured on 2x16 GB with deploy_bf16_16gb.yaml; deviation is kernel-noise level |

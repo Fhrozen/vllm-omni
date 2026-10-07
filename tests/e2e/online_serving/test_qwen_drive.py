@@ -14,6 +14,7 @@ Environment: QD_MODEL_DIR, QD_DEPLOY, QD_GOLDEN_DIR, QD_SCENES, QD_IMAGE_ROOT, Q
 import importlib.util
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -21,6 +22,7 @@ import pytest
 import requests
 
 from tests.helpers.runtime import OmniServerParams
+from tests.helpers.stage_config import modify_stage_config
 
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
@@ -54,6 +56,13 @@ test_params = [
 ]
 
 
+SFT_DEPLOY = (
+    modify_stage_config(DEPLOY, updates={"stages": {2: {"model_config": {"planner_subfolder": "planner-sft"}}}})
+    if Path(DEPLOY).exists()
+    else DEPLOY
+)
+
+
 def _client_module():
     spec = importlib.util.spec_from_file_location("qd_client", REPO_ROOT / "customs/qwen_drive/client_example.py")
     module = importlib.util.module_from_spec(spec)
@@ -61,11 +70,19 @@ def _client_module():
     return module
 
 
-def _post(server, scene: int, mode: str) -> dict:
-    client = _client_module()
+def _body(scene: int, mode: str) -> dict:
     record = json.loads(Path(SCENES).read_text().splitlines()[scene])
-    body = client.build_request(record, IMAGE_ROOT, mode, "Describe the traffic scene and the safest action.", MODEL)
-    reply = requests.post(f"http://{server.host}:{server.port}/v1/chat/completions", json=body, timeout=900)
+    return _client_module().build_request(
+        record, IMAGE_ROOT, mode, "Describe the traffic scene and the safest action.", MODEL
+    )
+
+
+def _url(server) -> str:
+    return f"http://{server.host}:{server.port}/v1/chat/completions"
+
+
+def _post(server, scene: int, mode: str) -> dict:
+    reply = requests.post(_url(server), json=_body(scene, mode), timeout=900)
     assert reply.status_code == 200, reply.text[:500]
     return reply.json()
 
@@ -74,8 +91,8 @@ def _text(data: dict) -> str:
     return " ".join((c["message"].get("content") or "") for c in data["choices"]).strip()
 
 
-def _ade(trajectory, mode: str, scene: int) -> float:
-    want = np.load(GOLDEN / f"traj_{PLANNER}_{mode}_{scene}.npy")
+def _ade(trajectory, mode: str, scene: int, planner: str = PLANNER) -> float:
+    want = np.load(GOLDEN / f"traj_{planner}_{mode}_{scene}.npy")
     got = np.asarray(trajectory)
     assert got.shape == want.shape == (6, 50, 3)
     return float(np.linalg.norm(got[..., :2] - want[..., :2], axis=-1).mean())
@@ -105,3 +122,48 @@ def test_qwen_drive_reasoning_planning(omni_server, scene: int) -> None:
     reasoning = _text(data)
     assert reasoning and "<|" not in reasoning
     assert _ade(data["trajectory"], "reasoning", scene) < MAX_ADE_M
+
+
+@pytest.mark.parametrize("omni_server", test_params, indirect=True)
+def test_qwen_drive_concurrent_requests(omni_server) -> None:
+    jobs = [(0, "direct"), (1, "direct"), (2, "reasoning"), (1, "vqa"), (0, "reasoning")]
+    with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+        results = list(pool.map(lambda job: _post(omni_server, scene=job[0], mode=job[1]), jobs))
+    for (scene, mode), data in zip(jobs, results, strict=True):
+        if mode == "vqa":
+            assert len(_text(data)) > 20
+        else:
+            assert _ade(data["trajectory"], mode, scene) < MAX_ADE_M
+
+
+@pytest.mark.parametrize("omni_server", test_params, indirect=True)
+def test_qwen_drive_client_abort_does_not_break_server(omni_server) -> None:
+    with pytest.raises(requests.exceptions.ReadTimeout):
+        requests.post(_url(omni_server), json=_body(0, "reasoning"), timeout=0.3)
+    data = _post(omni_server, scene=1, mode="direct")
+    assert _ade(data["trajectory"], "direct", 1) < MAX_ADE_M
+
+
+@pytest.mark.parametrize("omni_server", test_params, indirect=True)
+def test_qwen_drive_streaming_vqa(omni_server) -> None:
+    body = _body(1, "vqa") | {"stream": True}
+    with requests.post(_url(omni_server), json=body, timeout=900, stream=True) as reply:
+        assert reply.status_code == 200
+        chunks = [line for line in reply.iter_lines() if line.startswith(b"data: ") and line != b"data: [DONE]"]
+    text = "".join(
+        choice["delta"].get("content") or "" for chunk in chunks for choice in json.loads(chunk[6:]).get("choices", [])
+    )
+    assert len(text.strip()) > 20
+    assert _ade(_post(omni_server, scene=1, mode="direct")["trajectory"], "direct", 1) < MAX_ADE_M
+
+
+@pytest.mark.parametrize(
+    "omni_server",
+    [test_params[0]._replace(stage_config_path=SFT_DEPLOY)],
+    indirect=True,
+)
+def test_qwen_drive_planner_sft(omni_server) -> None:
+    data = _post(omni_server, scene=1, mode="direct")
+    assert _ade(data["trajectory"], "direct", 1, planner="sft") < MAX_ADE_M
+    # The two planners must give different trajectories for the same scene.
+    assert _ade(data["trajectory"], "direct", 1, planner="rl") > 1e-3

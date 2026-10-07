@@ -1,0 +1,61 @@
+# BF16 variant squeezed onto 2x16 GB: GPU0 = stage 0 + planner, GPU1 = stage 1 (single sequence, short context).
+# Qwen-Drive deploy: VLM (stage 0) + VLM prefill that ships KV (stage 1) + planning expert (stage 2).
+# Topology: vllm_omni/model_executor/models/qwen_drive/pipeline.py.
+#
+# Request routing by `modalities`: ["text"] = VQA/reasoning text only (stops after stage 0);
+# ["trajectory"] = full pipeline. BF16 default: the VLM is ~9 GB, so stages 0 and 1 sit on different GPUs.
+# For 16 GB cards use qwen_drive_fp8.yaml. Pick the planner with `model_config.planner_subfolder` on stage 2
+# (planner-rl | planner-sft) or --stage-overrides.
+
+async_chunk: false
+trust_remote_code: true
+dtype: bfloat16
+# vllm-omni's prefix cache needs one full-attention KV group; Qwen3.5 is hybrid (GDN + full attention).
+enable_prefix_caching: false
+
+stages:
+  - stage_id: 0
+    devices: "0"
+    max_num_seqs: 1
+    max_model_len: 5000
+    max_num_batched_tokens: 5000
+    gpu_memory_utilization: 0.72
+    enforce_eager: true
+    limit_mm_per_prompt: {image: 12}
+    # The frontend's processor cache would send image hashes only; stage 1 never saw those images.
+    mm_processor_cache_gb: 0
+    default_sampling_params:
+      temperature: 0.0
+      max_tokens: 256
+      detokenize: true
+
+  - stage_id: 1
+    devices: "1"
+    max_num_seqs: 1
+    max_model_len: 5000
+    max_num_batched_tokens: 5000
+    gpu_memory_utilization: 0.72
+    enforce_eager: true
+    limit_mm_per_prompt: {image: 12}
+    # The frontend's processor cache would send image hashes only; stage 1 never saw those images.
+    mm_processor_cache_gb: 0
+    input_connectors:
+      from_stage_0: shared_memory_connector
+    default_sampling_params:
+      temperature: 0.0
+      max_tokens: 1
+      detokenize: false
+
+  - stage_id: 2
+    devices: "0"
+    max_num_seqs: 1
+    enforce_eager: true
+    model_class_name: QwenDrivePlannerPipeline
+    model_config:
+      planner_subfolder: planner-rl
+    input_connectors:
+      from_stage_1: shared_memory_connector
+
+connectors:
+  shared_memory_connector:
+    name: SharedMemoryConnector

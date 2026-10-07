@@ -88,10 +88,14 @@ def main() -> None:
         frames = sample.scene.frames_in_order()
         images = [resized_image(proc, f, config.current_image_pixels) for f in frames]
         ids = proc.encode_vqa(frames, "Describe the traffic scene and the safest action.")["input_ids"][0].tolist()
-        out = llm.generate(
-            {"prompt_token_ids": ids, "multi_modal_data": {"image": images}},
-            SamplingParams(temperature=0.0, max_tokens=128),
-        )[0].outputs[0].text.strip()
+        out = (
+            llm.generate(
+                {"prompt_token_ids": ids, "multi_modal_data": {"image": images}},
+                SamplingParams(temperature=0.0, max_tokens=128),
+            )[0]
+            .outputs[0]
+            .text.strip()
+        )
         want = (GOLDEN / f"vqa_{i}.txt").read_text().strip()
         common = os.path.commonprefix([out, want])
         print(f"scene {i}: identical={out == want} common_prefix_chars={len(common)}/{len(want)}")

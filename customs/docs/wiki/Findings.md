@@ -86,3 +86,8 @@ Scripts: `customs/qwen_drive/spikes/{s5_vllm_vlm.py,qd_probe.py,s2_tokenize_roun
 - `min_tokens` in the stage default sampling params breaks `max_tokens=1` requests; pass `min_tokens` per request.
 - Test harness gotcha: tests run at `--run-level=core_model` by default, which rewrites every deploy yaml stage to `load_format: dummy` (random weights: outputs of `\n` tokens, wrong trajectories). Use `--run-level=advanced_model` (done in `run_e2e_test.sh`).
 - Stage 1 re-prefill costs about 0.65 s per request (3.4k tokens, fp8) on top of 0.63 s stage 0 and 1.0 s planner (6 samples): ~2.6 s direct request when warm.
+
+## E10 findings (2026-10-08)
+- BF16 fits the 2x16 GB host with `customs/qwen_drive/deploy_bf16_16gb.yaml` (stage 0 + planner on GPU 0 at util 0.72, stage 1 on GPU 1, `max_num_seqs: 1`, `max_model_len: 5000`). Offline ADE vs the HF/sdpa golden: scene0 0.112/0.103 m (direct/reasoning), scene1 0.026/0.039, scene2 0.026/0.027.
+- Noise floor: the reference itself, switching only `attn_implementation` sdpa -> eager, differs from the golden by ADE 0.023 / 0.028 / 0.058 m (max |d| up to 0.24). So FP8 (0.028-0.055 m) and BF16 (0.026-0.112 m) deviations from the golden are at kernel-noise level; an ADE bound of 0.15 m is the right test threshold, and exact parity is not expected from vLLM's different attention/GDN kernels.
+- Online robustness (FP8): 5 concurrent mixed requests all correct; a client disconnect mid-request does not break later requests; VQA streaming works; planner-sft serves correctly via `model_config.planner_subfolder`. `trajectory` is returned for non-streaming requests only.
