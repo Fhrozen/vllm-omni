@@ -13,6 +13,7 @@ from io import BytesIO
 from typing import Any, Final, cast
 
 import jinja2
+import numpy as np
 import torch
 from fastapi import Request
 from openai.types.chat.chat_completion_audio import ChatCompletionAudio as OpenAIChatCompletionAudio
@@ -2504,6 +2505,7 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
         prompt_token_ids = None
         kv_transfer_params = None
         response_metrics: dict[str, Any] | None = None
+        response_trajectory: list[list[list[float]]] | None = None
 
         # For text+audio requests the audio final output shares output
         # indexes with the text final output. Collect audio choices and
@@ -2567,6 +2569,11 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
                 choices_data = []
             elif omni_outputs.final_output_type == "image":
                 choices_data = self._create_image_choice(omni_outputs, role, request, stream=False)
+            elif omni_outputs.final_output_type == "trajectory":
+                trajectory = (omni_outputs.multimodal_output or {}).get("trajectory")
+                if trajectory is not None:
+                    response_trajectory = np.asarray(trajectory, dtype=np.float64).tolist()
+                choices_data = []
             else:
                 logger.warning(f"Unsupported final output type: {omni_outputs.final_output_type}")
                 continue
@@ -2606,6 +2613,7 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
             prompt_text=prompt_text,
             kv_transfer_params=kv_transfer_params,
             metrics=response_metrics,
+            trajectory=response_trajectory,
         )
 
         # Log complete response if output logging is enabled

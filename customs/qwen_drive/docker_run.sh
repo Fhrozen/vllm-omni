@@ -21,6 +21,6 @@ if [ ! "$(docker images -q "$docker_tag")" ]; then
 fi
 
 # shellcheck disable=SC2086
-docker run --gpus "$gpus" --rm --ipc=host ${QD_EXTRA_DOCKER_ARGS} \
+docker run --gpus "$gpus" --rm --ipc=host --network host ${QD_EXTRA_DOCKER_ARGS} \
     -v "$WORKDIR":/workspace "$docker_tag" \
     bash -c "cd /workspace && . /workspace/.venv/bin/activate && $1"

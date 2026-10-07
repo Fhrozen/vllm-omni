@@ -67,3 +67,22 @@ Scripts: `customs/qwen_drive/spikes/{s5_vllm_vlm.py,qd_probe.py,s2_tokenize_roun
 
 ### Hardware note
 - Stage 0 (9 GB) and stage 1 (9 GB) need different GPUs (D6). The expert (2 GB) fits next to either.
+
+## E5/E7 implementation findings (2026-10-07)
+- End-to-end offline (fp8, 2x16 GB): `customs/qwen_drive/run_e2e_offline.sh --num-scenes 3 --modes direct,reasoning` -> trajectories `[6,50,3]` with ADE vs the BF16 reference golden 0.027-0.055 m (6/6 cases). Received K/V of the 8 full-attention layers vs golden: cosine mean 0.88-0.98 per layer (fp8 weights), anchor exactly equal to golden (522). seq_len 3385.
+- Placeholders: stage 0 must receive ONE `<|image_pad|>` per image (vLLM expands it from the image grid). Sending pre-expanded ids + images makes vLLM-Omni expand again (6427 tokens). Stage 0 reports its prompt expanded; stage 1 must keep those expanded ids and receive the already-processed image features, which the orchestrator forwards only to a stage whose `model_stage == "thinker"` (`vllm_omni/engine/orchestrator.py` ~L2648). Hence stage 1 is named `thinker` in `pipeline.py`. Raw `multi_modal_data` on a bridged `OmniTokensPrompt` is NOT processed (no placeholders get expanded).
+- Hybrid KV transfer needed a fix: `omni_ar_scheduler._mark_request_for_kv_transfer` used `block_ids_tuple[0]`, which is a GDN/Mamba group (1 block) in Qwen3.5; now uses the first `AttentionSpec` group (`_kv_transfer_group_index`). `kv_caches` list index == decoder layer index (verified with golden), so `kv_layer_indices` works as designed. `cache_config.block_size` is 272 for this model.
+- Prefix caching: vllm-omni raises `OmniPrefixCacheUnmatchError` for hybrid models ("requires a single full-attention kv-cache group; found 4") -> `enable_prefix_caching: false` in the deploy yamls. S6 verdict: not usable; stage 1 re-prefills the prompt (acceptable, ~3.4k tokens).
+- The mRoPE anchor comes from `QwenDriveVLMForConditionalGeneration.prepare_runner_inputs` (records `positions[:, last scheduled token]` per request) + `get_kv_transfer_metadata` -> `kv_metadata["rope_anchor"]`. Only the v1 AR runner (default) calls these hooks.
+- Diffusion payload key: a non-media output must use the key `"trajectory"` (or `"actions"`); other keys are treated as image payloads. The diffusion KV manager attaches received KV to `req` AND `req.sampling_params` (`past_key_values`, `kv_metadata`); the pipeline reads either. Output type `"trajectory"` is declared in `vllm_omni/diffusion/model_metadata.py`.
+- The Omni script needs an `if __name__ == "__main__":` guard (stages spawn processes).
+- fp8: `quantization: fp8_per_tensor` per stage in the yaml works (the name `fp8` is deprecated); quantizes 250 layers incl. the vision tower and GDN projections; each VLM stage takes 5.47 GiB (vs 9.04 GiB bf16). Stage init ~65 s, first request ~30 s.
+- A debug aid used for the K/V parity check was removed from the pipeline; re-add by dumping `req.past_key_values` and compare with `customs/qwen_drive/spikes/compare_kv.py`.
+
+## E8/E9 findings (2026-10-07)
+- Online path works end to end (non-streaming). The diffusion stage must get its own prompt: without a `custom_process_input_func` (`prefill_to_planner`, empty prompt) the orchestrator forwards the processed original prompt, whose `MultiModalKwargsItems` cannot be serialized to the diffusion stage.
+- Planner inputs must be sent as `extra_args` (canonical request field routed to diffusion stages). Declaring flat fields through `vllm_omni/model_extras` did NOT route them for this multi-stage pipeline (tested, then removed).
+- The frontend multimodal processor cache must be off (`mm_processor_cache_gb: 0`): it sends hashes only for repeated images and stage 1 then fails with "Multi-modal cache miss" (or reuses wrong features).
+- `min_tokens` in the stage default sampling params breaks `max_tokens=1` requests; pass `min_tokens` per request.
+- Test harness gotcha: tests run at `--run-level=core_model` by default, which rewrites every deploy yaml stage to `load_format: dummy` (random weights: outputs of `\n` tokens, wrong trajectories). Use `--run-level=advanced_model` (done in `run_e2e_test.sh`).
+- Stage 1 re-prefill costs about 0.65 s per request (3.4k tokens, fp8) on top of 0.63 s stage 0 and 1.0 s planner (6 samples): ~2.6 s direct request when warm.

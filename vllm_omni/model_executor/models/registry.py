@@ -284,6 +284,11 @@ _OMNI_MODELS = {
         "bagel",
         "OmniBagelForConditionalGeneration",
     ),
+    "QwenDriveVLMForConditionalGeneration": (
+        "qwen_drive",
+        "qwen_drive_vlm",
+        "QwenDriveVLMForConditionalGeneration",
+    ),
     "HunyuanImage3ForCausalMM": (
         "hunyuan_image3",
         "hunyuan_image3",

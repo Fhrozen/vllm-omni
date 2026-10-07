@@ -1575,6 +1575,15 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
             if self.chunk_transfer_adapter is not None:
                 self.chunk_transfer_adapter.cleanup_receiver(request_id)
 
+    def _kv_transfer_group_index(self) -> int:
+        """Index of the KV cache group holding paged attention KV (group 0 is a Mamba/GDN group in hybrid models)."""
+        from vllm.v1.kv_cache_interface import AttentionSpec
+
+        for index, group in enumerate(self.kv_cache_manager.kv_cache_config.kv_cache_groups):
+            if isinstance(group.kv_cache_spec, AttentionSpec):
+                return index
+        return 0
+
     def _mark_request_for_kv_transfer(self, req_id: str, seq_len: int) -> None:
         """Mark a request as needing KV cache transfer when it finishes."""
         # Avoid duplicate marking (if already pending in queue)
@@ -1586,7 +1595,7 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
             try:
                 block_ids_tuple = self.kv_cache_manager.get_block_ids(req_id)
                 if block_ids_tuple and len(block_ids_tuple) > 0:
-                    block_ids = block_ids_tuple[0]
+                    block_ids = block_ids_tuple[self._kv_transfer_group_index()]
 
                     # [Omni] Fix: Truncate blocks to match seq_len snapshot
                     # We need to know block_size. Usually in self.cache_config.block_size

@@ -43,6 +43,12 @@ _ARCH_TO_MODEL_TYPE: dict[str, str] = {
     "VoxCPM2TalkerForConditionalGeneration": "voxcpm2",
 }
 
+# Stage architectures whose HF config is a sub-config nested in the checkpoint's config.json. The sub-config is
+# written to a temp config dir (hf_config_path), so no custom config class or trust_remote_code is needed.
+_ARCH_TO_NESTED_HF_CONFIG: dict[str, str] = {
+    "QwenDriveVLMForConditionalGeneration": "vlm_config",
+}
+
 # Maps model architecture names to tokenizer subfolder paths within HF repos.
 _TOKENIZER_SUBFOLDER_MAP: dict[str, str] = {
     "CosyVoice3Model": "CosyVoice-BlankEN",
@@ -314,6 +320,28 @@ class OmniEngineArgs(EngineArgs):
         self._temp_config_dir = temp_dir
         logger.info("Patched empty HF config with model_type=%s at %s", model_type, temp_dir)
 
+    def _flatten_nested_hf_config(self, key: str) -> None:
+        """Serve a sub-config of config.json (e.g. ``vlm_config``) as the stage's HF config.
+
+        Writes it to a temp dir and sets self.hf_config_path; tokenizer/processor still load from the model dir.
+        """
+        from transformers import PretrainedConfig
+
+        config_dict, _ = PretrainedConfig.get_config_dict(self.model)
+        nested = config_dict.get(key)
+        if not isinstance(nested, dict):
+            return
+        flat = dict(nested)
+        flat["architectures"] = [self.model_arch]
+        if flat.get("dtype") is None and config_dict.get("dtype") is not None:
+            flat["dtype"] = config_dict["dtype"]
+        temp_dir = tempfile.mkdtemp(prefix="omni_hf_config_")
+        with open(os.path.join(temp_dir, "config.json"), "w") as f:
+            json.dump(flat, f)
+        self.hf_config_path = temp_dir
+        self._temp_config_dir = temp_dir
+        logger.info("Using nested %s of %s as the HF config (%s)", key, self.model, temp_dir)
+
     def create_model_config(self) -> OmniModelConfig:
         """Create an OmniModelConfig from these engine arguments.
         Returns:
@@ -363,6 +391,9 @@ class OmniEngineArgs(EngineArgs):
                 model_type = _ARCH_TO_MODEL_TYPE.get(self.model_arch)
                 if model_type is not None:
                     self._patch_empty_hf_config(model_type)
+                nested_key = _ARCH_TO_NESTED_HF_CONFIG.get(self.model_arch)
+                if nested_key is not None:
+                    self._flatten_nested_hf_config(nested_key)
 
         tokenizer = cast(str | None, getattr(self, "tokenizer", None))
 

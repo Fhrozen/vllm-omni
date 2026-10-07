@@ -1,0 +1,29 @@
+{#-
+  Qwen-Drive prompt layout for the OpenAI chat API (--chat-template). The reference model builds its prompt from raw
+  segments, so there is no system turn, no generation-prompt thinking tag and no "Picture N:" labels.
+
+  Messages: one user message whose content parts are text and images in reading order (camera view labels,
+  "frame: i", images, instruction). chat_template_kwargs.qwen_drive_mode:
+    vqa / reasoning (default): the assistant turn is left open
+    direct:                    an empty assistant turn is closed, the format the planner was trained to plan from
+-#}
+{%- set mode = qwen_drive_mode | default('vqa') -%}
+{%- for message in messages -%}
+    {{- '<|im_start|>' + message.role + '\n' -}}
+    {%- if message.content is string -%}
+        {{- message.content -}}
+    {%- else -%}
+        {%- for part in message.content -%}
+            {%- if part.type == 'text' -%}
+                {{- part.text -}}
+            {%- elif part.type == 'image' or part.type == 'image_url' -%}
+                {{- '<|vision_start|><|image_pad|><|vision_end|>' -}}
+            {%- endif -%}
+        {%- endfor -%}
+    {%- endif -%}
+    {{- '<|im_end|>\n' -}}
+{%- endfor -%}
+{{- '<|im_start|>assistant\n' -}}
+{%- if mode == 'direct' -%}
+    {{- '<|im_end|>\n' -}}
+{%- endif -%}

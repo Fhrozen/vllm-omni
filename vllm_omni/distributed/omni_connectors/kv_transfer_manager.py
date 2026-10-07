@@ -141,6 +141,8 @@ class OmniKVCacheConfig:
     to_tp: int = 1
     enable_kv_async_prefetch: bool = False
     kv_prefetch_min_free_mem_ratio: float = 0.0
+    # Decoder-layer indices to send; None sends every layer that holds paged attention KV (hybrid models: set it).
+    kv_layer_indices: list[int] | None = None
 
 
 @dataclass
@@ -463,6 +465,7 @@ class OmniKVTransferManager:
                 to_tp=int(rank_mapping.get("to_tp", 1)),
                 enable_kv_async_prefetch=async_prefetch,
                 kv_prefetch_min_free_mem_ratio=cfg.get("kv_prefetch_min_free_mem_ratio", 0.0),
+                kv_layer_indices=cfg.get("kv_layer_indices"),
             ),
             async_prefetch=async_prefetch,
         )
@@ -1069,8 +1072,12 @@ class OmniKVTransferManager:
         num_layers = len(kv_caches)
         key_cache: list[torch.Tensor | None] = [None] * num_layers
         value_cache: list[torch.Tensor | None] = [None] * num_layers
+        allowed_layers = self.config.kv_layer_indices
+        allowed = None if allowed_layers is None else set(allowed_layers)
 
         for layer_idx, layer_kv in enumerate(kv_caches):
+            if allowed is not None and layer_idx not in allowed:
+                continue
             kv_pair = normalize_layer_kv(layer_kv, req_id=req_id, layer_idx=layer_idx, block_size=block_size)
             if kv_pair is None:
                 continue

@@ -5,7 +5,7 @@
 ``DiffusionEngine.step() -> pipeline.forward(req)``. The upstream AR stage sends the post-rotary K/V of the
 VLM's full-attention layers (``req.past_key_values``) and the mRoPE position of the last prompt token
 (``req.kv_metadata["rope_anchor"]``). Per-scene numeric inputs arrive in ``sampling_params.extra_args``.
-Output: ``DiffusionOutput(output={"trajectories": ndarray[num_samples, points, 3]})``.
+Output: ``DiffusionOutput(output={"trajectory": ndarray[num_samples, points, 3]})``.
 
 The pipeline self-loads one planner (``planner_subfolder`` in the deploy ``model_config``) from the model
 directory, so no ``trust_remote_code`` is needed: ``config.json`` is read as plain JSON.
@@ -111,15 +111,23 @@ class QwenDrivePlannerPipeline(nn.Module):
 
     # ------------------------------------------------------------------
     @staticmethod
-    def _rope_anchor(req: OmniDiffusionRequest, extra_args: dict[str, Any]) -> int:
-        meta = getattr(req, "kv_metadata", None) or {}
+    def _received(req: OmniDiffusionRequest, name: str) -> Any:
+        # The KV manager attaches received data to both the request and its sampling params.
+        value = getattr(req, name, None)
+        if value is None:
+            value = getattr(getattr(req, "sampling_params", None), name, None)
+        return value
+
+    @classmethod
+    def _rope_anchor(cls, req: OmniDiffusionRequest, extra_args: dict[str, Any]) -> int:
+        meta = cls._received(req, "kv_metadata") or {}
         anchor = meta.get("rope_anchor", extra_args.get("rope_anchor"))
         if anchor is None:
             raise ValueError("missing rope_anchor (kv_metadata['rope_anchor'] or extra_args['rope_anchor'])")
         return int(np.asarray(anchor).reshape(-1)[-1])
 
     def _scene_cache(self, req: OmniDiffusionRequest) -> list[tuple[torch.Tensor, torch.Tensor]]:
-        kv = getattr(req, "past_key_values", None)
+        kv = self._received(req, "past_key_values")
         if kv is None:
             raise ValueError("missing past_key_values: the VLM stage did not send its KV cache")
         # Entries of layers the sender skipped (non-attention) are None; the rest are in layer order.
@@ -136,16 +144,18 @@ class QwenDrivePlannerPipeline(nn.Module):
         if extra_args.get("ego_status") is not None:
             return _as_tensor(extra_args["ego_status"], torch.float32, self._device).reshape(1, -1)
         parts = [extra_args["ego_velocity"], extra_args["ego_acceleration"], extra_args["driving_command"]]
-        return _as_tensor(np.concatenate([np.asarray(p, dtype=np.float32).reshape(-1) for p in parts]), torch.float32, self._device).reshape(1, -1)
+        return _as_tensor(
+            np.concatenate([np.asarray(p, dtype=np.float32).reshape(-1) for p in parts]), torch.float32, self._device
+        ).reshape(1, -1)
 
     @torch.inference_mode()
     def forward(self, req: OmniDiffusionRequest, **kwargs) -> DiffusionOutput:
         extra_args = getattr(req.sampling_params, "extra_args", None) or {}
 
-        if getattr(req, "past_key_values", None) is None and "history" not in extra_args:
+        if self._received(req, "past_key_values") is None and "history" not in extra_args:
             # Engine warmup / dummy run: no scene, return zeros.
             return DiffusionOutput(
-                output={"trajectories": np.zeros((1, self.settings.num_future_points, 3), dtype=np.float32)}
+                output={"trajectory": np.zeros((1, self.settings.num_future_points, 3), dtype=np.float32)}
             )
 
         try:
@@ -165,12 +175,14 @@ class QwenDrivePlannerPipeline(nn.Module):
                 ego_status=self._ego_status(extra_args),
                 num_samples=int(extra_args.get("num_samples", 1)),
                 num_steps=int(extra_args.get("num_steps") or self.settings.num_inference_steps),
-                seed=int(extra_args.get("seed") if extra_args.get("seed") is not None else self.settings.noise_seed),
+                seed=int(
+                    extra_args.get("noise_seed")
+                    if extra_args.get("noise_seed") is not None
+                    else self.settings.noise_seed
+                ),
             )
         except (KeyError, ValueError) as e:
             return DiffusionOutput(error=f"QwenDrivePlannerPipeline: {e}")
 
-        output: dict[str, Any] = {"trajectories": trajectories.float().cpu().numpy()}
-        if extra_args.get("reasoning") is not None:
-            output["reasoning"] = extra_args["reasoning"]
-        return DiffusionOutput(output=output)
+        # "trajectory" is a non-media payload key the output formatter forwards to multimodal_output untouched.
+        return DiffusionOutput(output={"trajectory": trajectories.float().cpu().numpy()})

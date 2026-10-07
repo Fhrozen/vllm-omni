@@ -110,7 +110,12 @@ class TestPlanningExpertUnits:
             "trajectory_scale": [165.0, 25.0, 1.5703125],
             "min_one_minus_t": 0.1,
             "model_type": "qwen_drive",
-            "expert_config": {"hidden_size": 1024, "layers_per_kv": 4, "mrope_section": [11, 11, 10], "model_type": "x"},
+            "expert_config": {
+                "hidden_size": 1024,
+                "layers_per_kv": 4,
+                "mrope_section": [11, 11, 10],
+                "model_type": "x",
+            },
         }
         s = PlannerSettings.from_hf_config(cfg)
         assert s.num_future_points == 50 and s.expert.hidden_size == 1024
@@ -202,4 +207,4 @@ def test_pipeline_forward_matches_golden(planner: str):
     out = pipe.forward(req)
     assert out.error is None, out.error
     want = np.load(GOLDEN_DIR / f"traj_{planner}_direct_0.npy")
-    np.testing.assert_allclose(out.output["trajectories"], want, atol=1e-3)
+    np.testing.assert_allclose(out.output["trajectory"], want, atol=1e-3)

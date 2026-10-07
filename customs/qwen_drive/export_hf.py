@@ -141,7 +141,7 @@ def main() -> None:
     }
     (args.out / "config.json").write_text(json.dumps(config, indent=2) + "\n")
     (args.out / "video_preprocessor_config.json").write_text(json.dumps(VIDEO_PREPROCESSOR, indent=2) + "\n")
-
+    shutil.copyfile(Path(__file__).parent / "chat_template_drive.jinja", args.out / "chat_template_drive.jinja")
     readme = (args.ckpt / "README.md").read_text()
     marker = "# Qwen-Drive-1.0-4B\n"
     head, sep, tail = readme.partition(marker)

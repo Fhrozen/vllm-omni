@@ -463,7 +463,11 @@ def plan_trajectories(
         nav_command=tile(nav_command),
         ego_status=tile(ego_status.float()),
         noise=initial_noise(
-            num_samples, settings.num_future_points, settings.trajectory_point_dim, seed, device,
+            num_samples,
+            settings.num_future_points,
+            settings.trajectory_point_dim,
+            seed,
+            device,
             settings.noise_init_std,
         ),
         num_steps=num_steps,

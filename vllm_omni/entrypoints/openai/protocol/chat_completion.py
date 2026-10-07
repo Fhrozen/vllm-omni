@@ -31,3 +31,5 @@ class OmniChatCompletionStreamResponse(ChatCompletionStreamResponse):
 class OmniChatCompletionResponse(ChatCompletionResponse):
     choices: list[SerializeAsAny[ChatCompletionResponseChoice]]
     metrics: dict[str, Any] | None = None
+    # Planner output (Qwen-Drive): [num_samples, num_points, 3] of (x, y, heading) in metres/radians, ego frame.
+    trajectory: list[list[list[float]]] | None = None

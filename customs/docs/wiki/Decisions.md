@@ -18,4 +18,5 @@
 - D6 (hardware-driven): each AR stage loads a 9 GB VLM, so stage 0 and stage 1 cannot share a 16 GB GPU. Place stage 0 on GPU 0, stage 1 on GPU 1, expert (2 GB) on GPU 0 or 1. Revisit if a single-AR-stage design (model runner appends the closed-turn tokens) proves feasible in S4.
 
 ## Change log
+- 2026-10-07 (E5/E7): user asked to use fp8 for tests so the model fits 16 GB GPUs; BF16 evaluation will happen later on a larger-VRAM machine. Added `qwen_drive_fp8.yaml` (online `fp8_per_tensor` on the two VLM stages; planner stays BF16) used by all docker tests; `qwen_drive.yaml` is the BF16 deploy. Stage 1 is named `thinker` so the orchestrator forwards the processed image features (D2 unchanged otherwise). Prefix caching is disabled in both yamls (hybrid model).
 - 2026-10-07 (E4): D1 refined, D3 changed to a single yaml, D3b added, D4 refined. D2/D6 confirmed (a single AR stage cannot append `<|im_end|>\n` to the KV; vLLM runs the VLM on one 16 GB GPU with 2.4 GiB of KV).

@@ -1,0 +1,59 @@
+# Qwen-Drive deploy for 16 GB GPUs: online FP8 weight quantization of the two VLM stages (~5 GB each instead of ~9 GB).
+# Same topology/routing as qwen_drive.yaml. FP8 changes the VLM K/V slightly, so trajectories differ from BF16
+# beyond kernel noise; use the BF16 deploy for accuracy evaluation.
+# Placement: GPU 0 = stage 0 + planner (stage 2); GPU 1 = stage 1.
+
+async_chunk: false
+trust_remote_code: true
+dtype: bfloat16
+# vllm-omni's prefix cache needs one full-attention KV group; Qwen3.5 is hybrid (GDN + full attention).
+enable_prefix_caching: false
+
+stages:
+  - stage_id: 0
+    devices: "0"
+    max_num_seqs: 2
+    max_model_len: 8192
+    max_num_batched_tokens: 8192
+    gpu_memory_utilization: 0.55
+    enforce_eager: true
+    quantization: fp8_per_tensor
+    limit_mm_per_prompt: {image: 12}
+    # The frontend's processor cache would send image hashes only; stage 1 never saw those images.
+    mm_processor_cache_gb: 0
+    default_sampling_params:
+      temperature: 0.0
+      max_tokens: 256
+      detokenize: true
+
+  - stage_id: 1
+    devices: "1"
+    max_num_seqs: 2
+    max_model_len: 8192
+    max_num_batched_tokens: 8192
+    gpu_memory_utilization: 0.55
+    enforce_eager: true
+    quantization: fp8_per_tensor
+    limit_mm_per_prompt: {image: 12}
+    # The frontend's processor cache would send image hashes only; stage 1 never saw those images.
+    mm_processor_cache_gb: 0
+    input_connectors:
+      from_stage_0: shared_memory_connector
+    default_sampling_params:
+      temperature: 0.0
+      max_tokens: 1
+      detokenize: false
+
+  - stage_id: 2
+    devices: "0"
+    max_num_seqs: 1
+    enforce_eager: true
+    model_class_name: QwenDrivePlannerPipeline
+    model_config:
+      planner_subfolder: planner-rl
+    input_connectors:
+      from_stage_1: shared_memory_connector
+
+connectors:
+  shared_memory_connector:
+    name: SharedMemoryConnector
