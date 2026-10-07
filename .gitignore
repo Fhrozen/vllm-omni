@@ -287,3 +287,7 @@ lance_compare/
 
 # Linting binaries downloaded by local pre-commit hooks
 shellcheck*/
+
+.uv-bin/
+.uv_cache/
+!docker/Dockerfile.dev
