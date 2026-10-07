@@ -293,3 +293,4 @@ shellcheck*/
 .hf_cache/
 !docker/Dockerfile.dev
 extra_repos/
+customs/docs/golden/
