@@ -290,4 +290,6 @@ shellcheck*/
 
 .uv-bin/
 .uv_cache/
+.hf_cache/
 !docker/Dockerfile.dev
+extra_repos/

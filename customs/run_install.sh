@@ -14,7 +14,7 @@ if [ ! "$(docker images -q "$docker_tag")" ]; then
     cd "$THISPATH"
 fi
 
-docker run --gpus all --rm -v "$WORKDIR":/workspace "$docker_tag" bash -c "uv venv --python 3.12 --seed; \
+docker run --gpus all --rm -v "$WORKDIR":/workspace --ipc=host "$docker_tag" bash -c "uv venv --python 3.12 --seed; \
     source .venv/bin/activate; \
     uv pip install vllm==0.31.0 --torch-backend=auto \
         --extra-index-url https://wheels.vllm.ai/db9527a46873454610df6dbedf79a36d6bf1a7f6; \

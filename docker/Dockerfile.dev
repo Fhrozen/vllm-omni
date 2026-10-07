@@ -5,7 +5,7 @@ RUN apt-get update && apt-get install -y \
     git \
     curl \
     wget \
-    vim \
+    libopencv-dev \
     ca-certificates \
     build-essential \
     ca-certificates \
@@ -21,6 +21,7 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
     && rm -rf /var/lib/apt/lists/*
 
 ENV PATH="$UV_INSTALL_DIR:$PATH"
+ENV HF_HOME="/workspace/.hf_cache"
 RUN mkdir -p /workspace
 WORKDIR /workspace
 RUN git config --global --add safe.directory /workspace
