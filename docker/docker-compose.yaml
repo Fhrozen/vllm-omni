@@ -1,0 +1,57 @@
+# Serve a self-contained vllm-omni image (docker/Dockerfile.custom).
+#
+# The image ENTRYPOINT is `vllm serve --omni`; the `command:` below supplies the
+# model name and any remaining flags. No package installs or package volumes are
+# needed at serve time — the model is pulled from HuggingFace at start and cached
+# in ./cache.
+#
+# Configuration via .env:
+#   Compose auto-loads docker/.env (the project directory is docker/, since the
+#   compose file lives there) for variable interpolation. Copy the template and
+#   edit it:
+#     cp docker/.env.example docker/.env
+#   Variables: MODEL (required), HF_TOKEN (optional, gated models),
+#   EXTRA_ARGS (optional, extra `vllm serve` flags).
+#
+# Usage:
+#   docker compose -f docker/docker-compose.yaml up
+#   # or, without a .env file, pass them inline:
+#   MODEL=Tongyi-MAI/Z-Image-Turbo docker compose -f docker/docker-compose.yaml up
+#
+# Model-specific flags (e.g. --deploy-config vllm_omni/deploy/qwen_drive_fp8.yaml,
+# --stage-overrides ...) go in EXTRA_ARGS.
+
+services:
+  vllm:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.custom
+    image: fhrozen/vllm-omni:custom-cuda13
+    command: >
+      ${MODEL:?Set MODEL to a HuggingFace model id or local path}
+      --port 8080
+      ${EXTRA_ARGS:-}
+    ports:
+      - 8080:8080
+    ipc: host
+    environment:
+      - HF_TOKEN=${HF_TOKEN:-}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - ./cache:/root/.cache
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=5)"
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 300s

@@ -1,0 +1,34 @@
+############################
+#
+# For reviewing the available tags, use:
+# `curl -s "https://hub.docker.com/v2/repositories/vllm/vllm-openai/tags?page_size=100" | jq -r '.results[].name' | grep -e "0.26.0"`
+#
+############################
+
+services:
+  vllm:
+    image: vllm/vllm-openai:v0.26.0-cu129
+    # environment:
+    #   - VLLM_USE_V2_MODEL_RUNNER=1
+    pull_policy: always
+    command: >
+      Qwen/Qwen3.5-4B
+      --max-num-seqs 16
+      --max-model-len 16384
+      --quantization fp8
+      --reasoning-parser qwen3
+      --reasoning-config '{"reasoning_start_str": "<think>", "reasoning_end_str": "\nI have to give the solution based on the reasoning directly now.</think>"}'
+      --port 8080
+    # 16384 32768
+    ports:
+      - 8080:8080
+    ipc: host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - ./cache:/root/.cache

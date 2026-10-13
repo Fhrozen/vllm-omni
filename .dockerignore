@@ -1,0 +1,57 @@
+# Exclude large/irrelevant directories from the Docker build context.
+# This speeds up builds by not shipping .venv, extra_repos, .git, etc.
+# to the Docker daemon.
+
+.git
+.venv
+.eggs
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Build artifacts
+/build
+dist
+*.egg-info/
+.installed.cfg
+MANIFEST
+
+# Caches
+.mypy_cache
+.pytest_cache
+.ruff_cache
+.tox
+.eggs
+
+# Large data / model repos (git-ignored on the host, but present on disk)
+extra_repos/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Docker: keep docker/install_custom.sh (COPYed by the Dockerfile); ignore the
+# rest of the docker/ directory and any .dockerignore files.
+docker/*
+!docker/install_custom.sh
+*.dockerignore
+
+# Test / CI
+tests/
+.buildkite/
+buildkite/
+
+# Docs (not needed for the serving image)
+docs/
+mkdocs.yml
+
+# Examples / benchmarks / apps (not needed for the serving image)
+examples/
+benchmarks/
+apps/
+tools/
+
+# Requirements are copied explicitly; keep them out of the context to avoid
+# confusion (they are still available via the targeted COPY in the Dockerfile).
+# NOTE: do NOT ignore requirements/ — the Dockerfile COPYs it explicitly.

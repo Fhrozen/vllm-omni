@@ -1,0 +1,56 @@
+# Self-contained vllm-omni serving image.
+#
+# Built on the official vllm-openai image (which already ships vllm, torch and
+# the CUDA runtime) and installs vllm-omni at build time. The result needs no
+# package installs and no package volumes at serve time: the model is passed as
+# the compose `command:` and pulled from HuggingFace at container start.
+#
+# Build (from the repo root):
+#   docker build -f docker/Dockerfile.custom -t fhrozen/vllm-omni:custom-cuda13 .
+#
+# Serve:
+#   MODEL=Tongyi-MAI/Z-Image-Turbo docker compose -f docker/docker-compose.yaml up
+#
+# The ENTRYPOINT is fixed to `vllm serve --omni`; the compose `command:` supplies
+# the model name and any remaining flags.
+
+ARG BASE_IMAGE=vllm/vllm-openai:v0.31.0
+FROM ${BASE_IMAGE}
+
+ARG COMMON_WORKDIR=/opt/vllm-omni
+WORKDIR ${COMMON_WORKDIR}
+
+# System dependencies needed to build/install and to serve (ffmpeg for media,
+# libopencv for vision preprocessing, espeak-ng for TTS, git/jq for tooling).
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        git \
+        jq \
+        espeak-ng \
+        ffmpeg \
+        libopencv-dev \
+        ca-certificates && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# setuptools-scm derives the version from git; the source is copied without
+# .git, so pin the version to keep the build deterministic.
+ENV VLLM_OMNI_VERSION_OVERRIDE=0.0.0
+
+# Targeted COPY only (never `COPY . .`) so .venv, extra_repos/ and .git are not
+# part of the image. Copy dependency metadata first, then the package source.
+COPY pyproject.toml setup.py ./
+COPY requirements/ requirements/
+COPY vllm_omni/ vllm_omni/
+COPY docker/install_custom.sh /tmp/install_custom.sh
+
+RUN bash /tmp/install_custom.sh && rm -f /tmp/install_custom.sh
+
+# HuggingFace cache lives under /root/.cache so it can be bind-mounted by the
+# compose file (./cache:/root/.cache) without a package volume.
+ENV HF_HOME=/root/.cache/huggingface
+EXPOSE 8080
+
+# The serve command is fixed in the image; the compose `command:` appends the
+# model name and remaining flags (exec-form, no shell).
+ENTRYPOINT ["vllm", "serve", "--omni"]
