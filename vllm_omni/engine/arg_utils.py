@@ -584,6 +584,7 @@ class OrchestratorArgs:
 
     # === Observability ===
     log_stats: bool = False
+    collect_stage_metrics: bool = True
     enable_orch_monitor: bool = False
 
     # === Headless Mode (also forwarded to engine — see SHARED_FIELDS) ===
@@ -628,6 +629,7 @@ class OrchestratorArgs:
     vae_use_slicing: bool = False
     vae_use_tiling: bool = False
     vae_fast_path: str = "lossless"
+    vae_encode_fast_path: str = "lossless"
     enable_multithread_weight_load: bool = True
     enable_broadcast_weight_load: bool = False
     num_weight_load_threads: int = 4
