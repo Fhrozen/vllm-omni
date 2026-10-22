@@ -10,6 +10,7 @@ HF repo usable with `--trust-remote-code` (no `Qwen-Drive-1.0` package), and tes
 4. Your episode page in [episodes/](episodes/).
 5. [Environment](Environment.md): docker/uv commands and hardware.
 6. [Risks](Risks.md), [Architecture](Architecture.md).
+7. [OpenAI-Request](OpenAI-Request.md): how to submit a request over `/v1/chat/completions` (client example + curl).
 
 ## Rules
 - Documentation lives only in `customs/docs`. Never edit `docs/`, `recipes/`, `mkdocs.yml`.
