@@ -58,7 +58,7 @@ def build_payload(args) -> dict:
         "seed": args.seed,
     }
     if args.num_steps is not None:
-        extra_args["num_steps"] = args.num_steps
+        extra_args["num_inference_steps"] = args.num_steps
     if args.guidance_schedule:
         extra_args["guidance_schedule"] = args.guidance_schedule
     if args.mu is not None:

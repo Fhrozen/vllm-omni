@@ -68,6 +68,9 @@ has no running instance and the host Python has no torch. Runtime verification m
 - `AutoWeightsLoader` cannot handle `Fp8Linear` buffers, so the pipeline dispatches weights itself
   (`load_streamed_weights`); buffers are never part of the strict expected-parameter check.
 - Reference config key `adanln_dim` is a typo; the HF config uses `adaln_dim`.
+- `num_steps` is not a declared extra-body param, so a request that sets it is dropped; the pipeline reads
+  `sampling_params.num_inference_steps`. All examples and `customs/ideogram/samples.json` use
+  `num_inference_steps` as the canonical key.
 
 ## Risks
 
@@ -117,3 +120,28 @@ IG_MODEL_DIR=/path/to/ideogram-4-fp8 \
 The invalid-param case lives in its own file (`test_invalid_diffusion_chat.py`) rather than
 `test_invalid_omni_chat.py` because that module carries the `omni` model-type marker while
 Ideogram 4 is diffusion-only.
+
+## Sample generation
+
+`customs/ideogram/generate_samples.py` drives the pipeline from a JSON **list** of image details,
+so one file describes a whole batch of samples. `customs/ideogram/samples.json` is the checked-in
+spec (five entries: default preset, non-square resolution, turbo, an explicit `guidance_schedule`,
+and a multi-image entry).
+
+```bash
+python customs/ideogram/generate_samples.py                       # every entry
+python customs/ideogram/generate_samples.py --only fox turbo      # a subset
+python customs/ideogram/generate_samples.py --dry-run             # payloads only, no GPU
+bash customs/ideogram/run_samples.sh                              # same thing inside docker
+```
+
+Keys use the same names the API takes in `extra_body`, so an entry is valid for both the offline
+`Omni` path and a server request. Script-only keys are `id`, `caption`, `output`, `notes`; anything
+else must be a sampling key (`height`, `width`, `seed`, `num_inference_steps`,
+`num_outputs_per_prompt`, `sigmas`, `output_type`) or a declared Ideogram 4 knob (`preset`,
+`guidance_schedule`, `mu`, `std`, `dit_copies`) — unknown keys are rejected before generation.
+
+Pre-flight checks the script runs so a bad spec fails before the model loads: sizes must be
+multiples of 16, `guidance_schedule` length must equal the step count, and captions must be
+non-empty. `dit_copies` is a startup knob, so the startup default is passed once with
+`--dit-copies`; a per-entry value only takes effect when the pipeline started in `keep` mode.

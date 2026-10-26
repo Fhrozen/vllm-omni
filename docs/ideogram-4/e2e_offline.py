@@ -46,8 +46,6 @@ def main() -> None:
     omni = Omni(**omni_kwargs)
 
     extra_args = {"preset": args.preset, "dit_copies": args.dit_copies}
-    if args.num_steps is not None:
-        extra_args["num_steps"] = args.num_steps
     if args.guidance_schedule:
         extra_args["guidance_schedule"] = args.guidance_schedule
     if args.mu is not None:
@@ -61,6 +59,10 @@ def main() -> None:
         seed=args.seed,
         extra_args={key: value for key, value in extra_args.items() if key in IDEOGRAM4_EXTRA_BODY_PARAMS},
     )
+    # `num_steps` is not a declared extra arg, so the step count has to go through
+    # the sampling param the pipeline actually reads.
+    if args.num_steps is not None:
+        params.num_inference_steps = args.num_steps
 
     outputs = omni.generate({"prompt": args.caption}, sampling_params_list=[params])
     images = next((getattr(o, "images", None) for o in outputs if getattr(o, "images", None)), None)
