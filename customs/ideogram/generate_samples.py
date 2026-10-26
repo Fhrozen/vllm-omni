@@ -43,8 +43,8 @@ step, index `num_steps - 1` is the first. `dit_copies` is a startup knob; a
 per-entry value only takes effect when the pipeline was started with `keep`, so
 the startup default is passed once through `--dit-copies`.
 
-Server equivalent: `docs/ideogram-4/serve.sh` then
-`python docs/ideogram-4/openai_request_example.py "<caption>"`.
+Server equivalent: `customs/ideogram/serve.sh` then
+`python customs/ideogram/openai_request_example.py "<caption>"`.
 """
 
 from __future__ import annotations
@@ -164,7 +164,7 @@ def main() -> None:
     parser.add_argument("--out-dir", type=Path, default=Path("/tmp/ideogram4_samples"))
     parser.add_argument("--only", nargs="+", help="Generate only these entry ids")
     parser.add_argument("--model", default="ideogram-ai/ideogram-4-fp8")
-    parser.add_argument("--deploy-config", default="docs/ideogram-4/deploy_ideogram4_fp8.yaml")
+    parser.add_argument("--deploy-config", default="customs/ideogram/deploy_ideogram4_fp8.yaml")
     parser.add_argument(
         "--dit-copies",
         choices=("keep", "clone"),

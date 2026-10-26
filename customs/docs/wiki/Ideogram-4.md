@@ -4,8 +4,8 @@ Goal: serve `ideogram-ai/ideogram-4-fp8` as a native vllm-omni diffusion pipelin
 the reference `ideogram4` package), request it over `/v1/chat/completions` with a JSON caption,
 and keep non-streaming responses only. Target hardware: 2×16 GB with fp8 weight-only DiT.
 
-Example code and the user-facing page live in `docs/ideogram-4/` (this is the one deliberate
-exception to the "documentation lives only in `customs/docs`" rule, per the user's request).
+Everything for this model stays in `customs/`: example code and the user-facing README in
+`customs/ideogram/`, the decision record here. Nothing is added to `docs/`.
 
 ## Status
 
@@ -15,7 +15,7 @@ exception to the "documentation lives only in `customs/docs`" rule, per the user
 | B | `ideogram4_transformer.py` (DiT, MRoPE, segment mask, SP plan) | done |
 | C | `text_encoder.py` (Qwen3-VL language model, 13 taps), `pipeline_ideogram4.py` | done |
 | D | Registry entries, `supports_streaming` metadata + serving guard, `dit_copies` knob | done |
-| E | `model_extras/ideogram4.py`, `docs/ideogram-4/` (README, client, offline example, deploy yaml) | done |
+| E | `model_extras/ideogram4.py`, `customs/ideogram/` (README, client, offline example, JSON sample set + generator, deploy yaml) | done |
 | F | `tests/diffusion/models/ideogram4/` (L1), `tests/e2e/online_serving/test_ideogram4.py` (L2), `test_ideogram4_expansion.py` (L4), `tests/dfx/reliability/invalid_param_test/test_invalid_diffusion_chat.py`, Buildkite wiring | done |
 | — | Caption verifier | **not ported** (reference source missing from the snapshot) |
 
@@ -54,6 +54,9 @@ has no running instance and the host Python has no torch. Runtime verification m
    denormalizes through `VaeImageProcessor`.
 8. **Out of scope.** Caption verifier, magic-prompt expansion, hosted API/safety screening,
    `recipes/` entry, `examples/model_display_names.yml`.
+9. **Documentation location.** Everything for this model stays in `customs/`: code, examples, and the
+   user-facing README in `customs/ideogram/`, the decision record here. `docs/` is not edited, so
+   Ideogram 4 is deliberately absent from `docs/models/supported_models.md` and has no mkdocs page.
 
 ## Findings (Ideogram 4)
 
@@ -84,7 +87,7 @@ has no running instance and the host Python has no torch. Runtime verification m
 1. CPU unit tests: `pytest tests/diffusion/models/ideogram4/test_ideogram4.py -v -m "core_model and cpu"`.
 2. Latent-norm + scheduler parity against the reference for a fixed tensor/seed.
 3. `nvidia-smi` peak per GPU after loading; no OOM at 1024×1024; record numbers here.
-4. e2e non-streaming via `docs/ideogram-4/serve.sh` + `docs/ideogram-4/openai_request_example.py`,
+4. e2e non-streaming via `customs/ideogram/serve.sh` + `customs/ideogram/openai_request_example.py`,
    PSNR against golden above the documented threshold.
 5. `curl` with `"stream": true` must return 400 (pytest assertion).
 6. `dit_copies`: resolution order + invalid-value error; then the same prompt/seed in both modes.

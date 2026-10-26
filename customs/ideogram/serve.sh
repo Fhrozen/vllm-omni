@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Serve Ideogram 4 with vllm-omni inside docker (host network, port 8091).
 #
-# Usage: docs/ideogram-4/serve.sh [deploy-config]
-#   default: docs/ideogram-4/deploy_ideogram4_fp8.yaml
+# Usage: customs/ideogram/serve.sh [deploy-config]
+#   default: customs/ideogram/deploy_ideogram4_fp8.yaml
 #
 # Startup knobs go through --custom-pipeline-args (there is no --extra-args CLI flag):
 #   --custom-pipeline-args '{"dit_copies": "clone"}'   # one shared DiT (default, fits 16 GB)
@@ -15,7 +15,7 @@
 set -e
 
 REPO=${REPO:-/workspace}
-DEPLOY=${1:-${REPO}/docs/ideogram-4/deploy_ideogram4_fp8.yaml}
+DEPLOY=${1:-${REPO}/customs/ideogram/deploy_ideogram4_fp8.yaml}
 MODEL=${IG4_MODEL:-ideogram-ai/ideogram-4-fp8}
 DIT_COPIES=${DIT_COPIES:-clone}
 

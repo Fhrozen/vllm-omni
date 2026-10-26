@@ -37,8 +37,8 @@ from tests.helpers.mark import hardware_marks
 from tests.helpers.runtime import OmniServer, OmniServerParams, OnlineOmniClient
 
 _MODEL_DIR = os.environ.get("IG_MODEL_DIR", "")
-REPO_ROOT = Path(__file__).resolve().parents[2]
-_DEPLOY = os.environ.get("IG_DEPLOY", str(REPO_ROOT / "docs/ideogram-4/deploy_ideogram4_fp8.yaml"))
+REPO_ROOT = Path(__file__).resolve().parents[3]
+_DEPLOY = os.environ.get("IG_DEPLOY", str(REPO_ROOT / "customs/ideogram/deploy_ideogram4_fp8.yaml"))
 
 pytestmark = [
     pytest.mark.slow,

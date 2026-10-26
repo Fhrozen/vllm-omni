@@ -33,8 +33,8 @@ pytestmark = [
     ),
 ]
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-DEPLOY = os.environ.get("IG_DEPLOY", str(REPO_ROOT / "docs/ideogram-4/deploy_ideogram4_fp8.yaml"))
+REPO_ROOT = Path(__file__).resolve().parents[3]
+DEPLOY = os.environ.get("IG_DEPLOY", str(REPO_ROOT / "customs/ideogram/deploy_ideogram4_fp8.yaml"))
 
 _SERVER = [
     pytest.param(

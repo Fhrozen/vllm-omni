@@ -1,5 +1,8 @@
 # Ideogram 4 in vllm-omni
 
+All Ideogram 4 example files live in `customs/ideogram/`; the decision/findings record is
+[customs/docs/wiki/Ideogram-4.md](../docs/wiki/Ideogram-4.md).
+
 Native port of `ideogram-ai/ideogram-4-fp8` as a single diffusion stage:
 
 ```
@@ -14,7 +17,7 @@ the latent norm constants, and the fp8 weight-only linear.
 ## Serving
 
 ```bash
-docs/ideogram-4/serve.sh
+customs/ideogram/serve.sh
 ```
 
 The endpoint is the standard OpenAI-compatible `POST /v1/chat/completions`. Ideogram 4 is
@@ -67,8 +70,8 @@ unconditional branch (zeroed conditioning), not against a negative caption.
 Run the client:
 
 ```bash
-python docs/ideogram-4/openai_request_example.py "a red fox sitting on a park bench"
-python docs/ideogram-4/openai_request_example.py "a red fox" --payload-out payload.json
+python customs/ideogram/openai_request_example.py "a red fox sitting on a park bench"
+python customs/ideogram/openai_request_example.py "a red fox" --payload-out payload.json
 curl -s http://localhost:8091/v1/chat/completions -H 'Content-Type: application/json' -d @payload.json
 ```
 
@@ -79,7 +82,7 @@ is the existing JSON passthrough):
 
 ```bash
 vllm serve ideogram-ai/ideogram-4-fp8 --omni \
-    --deploy-config docs/ideogram-4/deploy_ideogram4_fp8.yaml \
+    --deploy-config customs/ideogram/deploy_ideogram4_fp8.yaml \
     --custom-pipeline-args '{"dit_copies": "keep"}'
 ```
 
@@ -100,12 +103,13 @@ does not exist, and the pipeline logs a warning instead of silently switching.
 ## Offline example
 
 ```bash
-python docs/ideogram-4/e2e_offline.py "a red fox sitting on a park bench" --output /tmp/fox.png
-python docs/ideogram-4/e2e_offline.py "a red fox" --preset V4_TURBO_12 --dit-copies keep --ulysses-degree 2
+python customs/ideogram/e2e_offline.py "a red fox sitting on a park bench" --output /tmp/fox.png
+python customs/ideogram/e2e_offline.py "a red fox" --preset V4_TURBO_12 --dit-copies keep --ulysses-degree 2
 ```
 
 For a batch of samples described in one JSON list, use `customs/ideogram/generate_samples.py` with
-`customs/ideogram/samples.json` — see [customs/docs/wiki/Ideogram-4.md](../../customs/docs/wiki/Ideogram-4.md).
+`customs/ideogram/samples.json` (see the *Sample generation* section of
+[customs/docs/wiki/Ideogram-4.md](../docs/wiki/Ideogram-4.md)).
 
 ## Files
 
@@ -119,9 +123,13 @@ For a batch of samples described in one JSON list, use `customs/ideogram/generat
 | `vllm_omni/diffusion/models/ideogram4/latent_norm.py` | The 128-value shift/scale constants |
 | `vllm_omni/diffusion/models/ideogram4/constants.py` | Indicators, position offset, activation layers, patch sizes |
 | `vllm_omni/model_extras/ideogram4.py` | Declared `extra_body` params |
-| `docs/ideogram-4/deploy_ideogram4_fp8.yaml` | Single-stage deploy config |
+| `customs/ideogram/deploy_ideogram4_fp8.yaml` | Single-stage deploy config |
+| `customs/ideogram/serve.sh` | Docker serve wrapper (port 8091, `dit_copies` startup knob) |
+| `customs/ideogram/openai_request_example.py` | Non-streaming chat-completions client |
+| `customs/ideogram/e2e_offline.py` | Single-caption offline run, no server |
 | `customs/ideogram/generate_samples.py` | Batch generator driven by a JSON list of image details |
 | `customs/ideogram/samples.json` | Five sample entries (presets, non-square size, explicit schedule, multi-image) |
+| `customs/ideogram/run_samples.sh` | Docker wrapper for the JSON-driven generator |
 | `tests/diffusion/models/ideogram4/test_ideogram4.py` | L1 unit tests |
 | `tests/e2e/online_serving/test_ideogram4.py` | L2/L4 serving tests |
 | `tests/dfx/reliability/invalid_param_test/test_invalid_diffusion_chat.py` | HTTP 400 contract test |

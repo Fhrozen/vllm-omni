@@ -1,15 +1,15 @@
 """Submit an Ideogram 4 caption to a vllm-omni server through the OpenAI-compatible API.
 
-Copy-pasteable example for `Ideogram4Pipeline` (see docs/ideogram-4/README.md and
+Copy-pasteable example for `Ideogram4Pipeline` (see customs/ideogram/README.md and
 customs/docs/wiki/Ideogram-4.md). Ideogram 4 is text-to-image only: one caption, no
 reference images, no negative prompt, and the response is non-streaming only.
 
     # Generate and save the image:
-    python docs/ideogram-4/openai_request_example.py "a red fox sitting on a park bench"
+    python customs/ideogram/openai_request_example.py "a red fox sitting on a park bench"
 
     # Print the JSON payload, or write it to a file for curl:
-    python docs/ideogram-4/openai_request_example.py "a red fox" --print-payload
-    python docs/ideogram-4/openai_request_example.py "a red fox" --payload-out payload.json
+    python customs/ideogram/openai_request_example.py "a red fox" --print-payload
+    python customs/ideogram/openai_request_example.py "a red fox" --payload-out payload.json
     curl -s http://localhost:8091/v1/chat/completions -H 'Content-Type: application/json' -d @payload.json
 
 Payload skeleton:
@@ -33,7 +33,7 @@ Response: `choices[0].message.content` is a list of image parts, one per generat
     [{"type": "image_url", "image_url": {"url": "data:image/png;base64,..."},
       "stage_durations": {...}, "peak_memory_mb": 0.0}]
 
-Needs only requests. Server: docs/ideogram-4/serve.sh.
+Needs only requests. Server: customs/ideogram/serve.sh.
 """
 
 from __future__ import annotations

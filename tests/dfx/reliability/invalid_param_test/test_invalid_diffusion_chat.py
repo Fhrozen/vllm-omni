@@ -24,9 +24,9 @@ from tests.helpers.runtime import OmniServer, OmniServerParams, OnlineOmniClient
 
 pytestmark = [pytest.mark.slow, pytest.mark.diffusion]
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[4]
 _MODEL_DIR = os.environ.get("IG_MODEL_DIR", "")
-_DEPLOY = os.environ.get("IG_DEPLOY", str(REPO_ROOT / "docs/ideogram-4/deploy_ideogram4_fp8.yaml"))
+_DEPLOY = os.environ.get("IG_DEPLOY", str(REPO_ROOT / "customs/ideogram/deploy_ideogram4_fp8.yaml"))
 
 _IDEOGRAM4_SERVER = [
     pytest.param(

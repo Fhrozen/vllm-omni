@@ -14,9 +14,8 @@ HF repo usable with `--trust-remote-code` (no `Qwen-Drive-1.0` package), and tes
 
 ## Rules
 - Documentation lives only in `customs/docs`. Never edit `docs/`, `recipes/`, `mkdocs.yml`.
-  - Exception (user request): the Ideogram 4 page and example code live in `docs/ideogram-4/`,
-    and `docs/models/supported_models.md` gained one Ideogram 4 row for it.
-    See [Ideogram-4](Ideogram-4.md) for the decision/findings record.
+  - Ideogram 4: nothing goes in `docs/`. Code, examples, and the user-facing README live in
+    `customs/ideogram/`. See [Ideogram-4](Ideogram-4.md) for the decision/findings record.
 - Run anything GPU/python-related in docker: `customs/qwen_drive/docker_run.sh "<cmd>"` (activates `/workspace/.venv`).
 - `extra_repos/` is git-ignored; it holds the reference code (`Qwen-Drive-1.0`) and checkpoint (`Qwen-Drive-1.0-4B`).
 - vllm-omni code must never import `qwen_drive` (the reference package). It is only for golden/parity scripts.

@@ -525,7 +525,7 @@ source_file_dependencies:
 
   diffusion_ideogram4_function:
     - *ideogram4
-    - docs/ideogram-4/
+    - customs/ideogram/
     - tests/e2e/online_serving/test_ideogram4.py
     - tests/e2e/online_serving/test_ideogram4_expansion.py
 

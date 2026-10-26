@@ -10,7 +10,7 @@
 # `dit_copies` is a startup knob, not a request knob:
 #   --custom-pipeline-args '{"dit_copies": "keep"}'   # two instances, reference parity
 #   --custom-pipeline-args '{"dit_copies": "clone"}'  # one instance, saves ~9.3 GB
-# Per-request sampling knobs live in `extra_args` (see docs/ideogram-4/README.md).
+# Per-request sampling knobs live in `extra_args` (see customs/ideogram/README.md).
 
 async_chunk: false
 

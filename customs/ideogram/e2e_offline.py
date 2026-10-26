@@ -1,8 +1,8 @@
 """Offline end-to-end run of Ideogram 4 through vllm-omni (no server needed).
 
-    python docs/ideogram-4/e2e_offline.py "a red fox sitting on a park bench"
-    python docs/ideogram-4/e2e_offline.py "a red fox" --preset V4_TURBO_12 --output /tmp/fox.png
-    python docs/ideogram-4/e2e_offline.py "a red fox" --dit-copies clone --ulysses-degree 2
+    python customs/ideogram/e2e_offline.py "a red fox sitting on a park bench"
+    python customs/ideogram/e2e_offline.py "a red fox" --preset V4_TURBO_12 --output /tmp/fox.png
+    python customs/ideogram/e2e_offline.py "a red fox" --dit-copies clone --ulysses-degree 2
 
 Single-stage pipeline: Qwen3VL text encoder -> 34-layer FP8 DiT -> Flux2-style VAE.
 `--dit-copies clone` shares the transformer weights between the conditional and
@@ -25,7 +25,7 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("caption", help="The caption to generate from.")
     p.add_argument("--model", default="ideogram-ai/ideogram-4-fp8")
-    p.add_argument("--deploy-config", default="docs/ideogram-4/deploy_ideogram4_fp8.yaml")
+    p.add_argument("--deploy-config", default="customs/ideogram/deploy_ideogram4_fp8.yaml")
     p.add_argument("--preset", default="V4_QUALITY_48", choices=("V4_QUALITY_48", "V4_DEFAULT_20", "V4_TURBO_12"))
     p.add_argument("--height", type=int, default=1024)
     p.add_argument("--width", type=int, default=1024)
