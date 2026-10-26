@@ -1,0 +1,30 @@
+# Ideogram 4 deploy: one diffusion stage (Qwen3VL text encoder + 34-layer FP8 DiT + Flux2-style VAE).
+# Topology: vllm_omni/diffusion/models/ideogram4/pipeline_ideogram4.py (no AR stage, no connectors).
+#
+# Memory on a 16 GB card: DiT ~9.3 GB (FP8 weights), text encoder ~4.5 GB (bf16), VAE ~0.3 GB.
+# That is tight, so either run with layerwise offload
+#   --diffusion-offload-config '{"mode":"layer","components":["dit"]}'
+# or split the workload across two GPUs with sequence parallelism
+#   --ulysses-degree 2 --devices "0,1".
+#
+# `dit_copies` is a startup knob, not a request knob:
+#   --custom-pipeline-args '{"dit_copies": "keep"}'   # two instances, reference parity
+#   --custom-pipeline-args '{"dit_copies": "clone"}'  # one instance, saves ~9.3 GB
+# Per-request sampling knobs live in `extra_args` (see docs/ideogram-4/README.md).
+
+async_chunk: false
+
+stages:
+  - stage_id: 0
+    devices: "0"
+    max_num_seqs: 1
+    enforce_eager: true
+    model_class_name: Ideogram4Pipeline
+    default_sampling_params:
+      seed: 42
+      height: 1024
+      width: 1024
+      # Ideogram 4 uses a logit-normal timestep schedule rather than the diffusers
+      # sigma list; mu/std are resolved per request from the resolution when omitted.
+      extra_args:
+        preset: V4_QUALITY_48

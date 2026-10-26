@@ -125,6 +125,7 @@ from vllm.tool_parsers.streaming import extract_required_tool_call_streaming
 from vllm.utils.collection_utils import as_list
 from vllm.v1.engine.exceptions import EngineDeadError
 
+from vllm_omni.diffusion.model_metadata import get_diffusion_model_metadata
 from vllm_omni.entrypoints.openai.audio_utils_mixin import AudioMixin
 from vllm_omni.entrypoints.openai.image_api_utils import (
     encode_image_base64_with_compression,
@@ -291,6 +292,20 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
         return any(arch == "BailingMoeV3AudioForConditionalGeneration" for arch, _ in metadata) and any(
             model_stage == "ming3_tts" for _, model_stage in metadata
         )
+
+    def _supports_streaming_response(self) -> bool:
+        """Whether the served model can answer a streaming chat request.
+
+        Streaming chat responses are assembled from incremental outputs, so a
+        pipeline that produces one final object per request (an image, a
+        trajectory, ...) has nothing to stream and would emit a response with
+        no choices and no terminal chunk. Models without declared metadata keep
+        the previous behaviour.
+        """
+        model_class_name = self._resolve_multistage_model_class_name(self.engine_client)
+        if not model_class_name:
+            return True
+        return get_diffusion_model_metadata(model_class_name).supports_streaming
 
     async def _attach_ming3_reference_audio(self, engine_prompt: TokPrompt, request=None) -> None:
         """Resolve named voices or inline references before the Talker handoff."""
@@ -997,6 +1012,11 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
 
         # Streaming response
         if request.stream:
+            if not self._supports_streaming_response():
+                return self.create_error_response(
+                    "This model does not support streaming responses. Remove `stream` from the request "
+                    "to receive the response as a single JSON object."
+                )
             return self.chat_completion_stream_generator(
                 request,
                 result_generator,

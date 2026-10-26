@@ -40,6 +40,7 @@ from vllm_omni.model_extras.hunyuan_image3 import build_x_to_text_prompt as buil
 from vllm_omni.model_extras.hunyuan_image3 import (
     validate_ar_tokenizer as validate_hunyuan_image3_ar_tokenizer,
 )
+from vllm_omni.model_extras.ideogram4 import IDEOGRAM4_EXTRA_BODY_PARAMS
 from vllm_omni.model_extras.kandinsky6 import (
     KANDINSKY6_EXTRA_BODY_PARAMS,
     KANDINSKY6_EXTRA_OUTPUT_PARAMS,
@@ -346,6 +347,12 @@ _EXTRA_SPECS: dict[str, dict[str, Any]] = {
     "QwenImage21Pipeline": {
         "extra_body_params": QWEN_IMAGE_21_EXTRA_BODY_PARAMS,
         "image_to_image_prompt_builder": build_qwen_image_21_image_to_image_prompt,
+    },
+    # Ideogram 4 takes a caption only: no reference images, no negative prompt
+    # (CFG runs against an unconditional branch), and the sampling knobs are
+    # resolved per request from these keys.
+    "Ideogram4Pipeline": {
+        "extra_body_params": IDEOGRAM4_EXTRA_BODY_PARAMS,
     },
 }
 _EXTRA_SPECS["MingImageLayeredDiffusionPipeline"] = _EXTRA_SPECS["MingImageDiffusionPipeline"]

@@ -155,6 +155,11 @@ x-qwen-image-21: &qwen_image_21
   - vllm_omni/diffusion/distributed/autoencoders/autoencoder_kl_qwenimage21.py
   - vllm_omni/model_extras/qwen_image_21.py
 
+x-ideogram4: &ideogram4
+  - vllm_omni/diffusion/models/ideogram4/
+  - vllm_omni/diffusion/distributed/autoencoders/autoencoder_kl_flux2.py
+  - vllm_omni/model_extras/ideogram4.py
+
 x-hunyuan-image3: &hunyuan_image3
   - vllm_omni/diffusion/models/hunyuan_image3/
   - vllm_omni/model_executor/models/hunyuan_image3/
@@ -518,6 +523,12 @@ source_file_dependencies:
     - tests/e2e/online_serving/test_qwen_image_expansion.py
     - tests/e2e/offline_inference/test_qwen_image_autoround_w4a16_expansion.py
 
+  diffusion_ideogram4_function:
+    - *ideogram4
+    - docs/ideogram-4/
+    - tests/e2e/online_serving/test_ideogram4.py
+    - tests/e2e/online_serving/test_ideogram4_expansion.py
+
   diffusion_qwen_image_accuracy:
     - *qwen_image
     - tests/e2e/accuracy/test_qwen_image.py
@@ -650,9 +661,11 @@ source_file_dependencies:
     - *minicpmo_4_5
     - *qwen_image
     - *wan22
+    - *ideogram4
     - tests/dfx/reliability/invalid_param_test/
 
   reliability_invalid_param_l4:
     - *qwen3_tts
     - *stable_audio
+    - *ideogram4
     - tests/dfx/reliability/invalid_param_test/

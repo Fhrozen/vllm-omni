@@ -514,6 +514,18 @@ def test_qwen_image_21_extra_registry_declares_sigmas() -> None:
 
 @pytest.mark.core_model
 @pytest.mark.cpu
+def test_ideogram4_extra_registry_declares_sampling_knobs() -> None:
+    assert get_extra_body_params("Ideogram4Pipeline") == frozenset(
+        {"dit_copies", "guidance_schedule", "mu", "preset", "std"}
+    )
+    assert get_extra_output_params("Ideogram4Pipeline") == frozenset()
+    assert should_init_extra_args_for_non_diffusion_stages("Ideogram4Pipeline") is False
+    # The decoder emits the [-1, 1] range, which is the registry default.
+    assert get_output_tensor_range("Ideogram4Pipeline") == "negative_one_to_one"
+
+
+@pytest.mark.core_model
+@pytest.mark.cpu
 def test_qwen_image_21_image_to_image_prompt_builder() -> None:
     dummy_image = Image.new("RGBA", (64, 64))
     result = build_image_to_image_prompt(

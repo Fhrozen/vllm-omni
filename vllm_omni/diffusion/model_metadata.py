@@ -24,6 +24,11 @@ class DiffusionModelMetadata:
     # Whether ``/v1/videos`` accepts the ``timeline_guides`` manifest plus
     # ``guide_files`` uploads, forwarded as ``multi_modal_data["timeline_guides"]``.
     supports_timeline_guides: bool = False
+    # Whether the pipeline can serve ``stream=true`` on ``/v1/chat/completions``.
+    # Only pipelines that emit incremental chunks can answer a streaming request,
+    # so a pipeline whose final output is a single image must opt out and the API
+    # rejects streaming for it instead of returning a malformed response.
+    supports_streaming: bool = True
 
 
 # FLUX.2 Klein supports up to four reference images.
@@ -65,6 +70,12 @@ _DIFFUSION_MODEL_METADATA: dict[str, DiffusionModelMetadata] = {
     "BooguImagePipeline": DiffusionModelMetadata(
         supports_multimodal_inputs=True,
         max_multimodal_image_inputs=BOOGU_IMAGE_MAX_INPUT_IMAGES,
+    ),
+    # Ideogram 4 is text-to-image only and produces one image per request, so a
+    # streaming request cannot be answered with incremental chunks.
+    "Ideogram4Pipeline": DiffusionModelMetadata(
+        final_output_type="image",
+        supports_streaming=False,
     ),
     "JoyImageEditPipeline": DiffusionModelMetadata(
         supports_multimodal_inputs=True,
