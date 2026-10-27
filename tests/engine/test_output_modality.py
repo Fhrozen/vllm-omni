@@ -50,6 +50,9 @@ _accumulation_mod = _load_module(
 )
 
 OutputModality = _om_mod.OutputModality
+OutputModalityNames = _om_mod.OutputModalityNames
+NON_DRAINABLE_MODALITIES = _om_mod.NON_DRAINABLE_MODALITIES
+DRAINABLE_MODALITIES = _om_mod.DRAINABLE_MODALITIES
 TensorAccumulationStrategy = _om_mod.TensorAccumulationStrategy
 get_accumulation_strategy = _om_mod.get_accumulation_strategy
 register_key_accumulation_strategy = _om_mod.register_key_accumulation_strategy
@@ -361,3 +364,47 @@ def test_consolidate_tensors_raises_with_key_name_instead_of_silently_keeping_la
 
     with pytest.raises(RuntimeError, match="latent.frames"):
         payload.consolidate_tensors(OutputModality.LATENT)
+
+
+def test_segmentation_is_a_retained_stage_to_stage_modality():
+    """WeVisOne-VL serves ``engine_output_type: text+segmentation`` on stage 0, so
+    the compound name must parse and segmentation must never be drained.
+    """
+    assert OutputModality.from_string("segmentation") == OutputModality.SEGMENTATION
+    compound = OutputModality.from_string("text+segmentation")
+    assert compound == OutputModality.TEXT | OutputModality.SEGMENTATION
+    assert compound.has_text and compound.has_multimodal
+
+    assert OutputModalityNames.SEGMENTATION in NON_DRAINABLE_MODALITIES
+    assert OutputModalityNames.SEGMENTATION not in DRAINABLE_MODALITIES
+
+
+def test_delta_drain_retains_segmentation_for_the_pixel_decoder_stage():
+    features = torch.zeros(4, 1024, 2, 2)
+    t_seg = torch.zeros(1, 2560)
+    payload = MultimodalPayload.from_dict(
+        {"segmentation.features": features, "segmentation.t_seg": t_seg, "image": torch.ones(1, 1, 2, 2)}
+    )
+    assert payload is not None
+
+    _accumulation_mod.drain_delta_payload(payload)
+
+    assert set(payload) == {"segmentation.features", "segmentation.t_seg"}
+    torch.testing.assert_close(payload["segmentation.features"], features)
+    torch.testing.assert_close(payload["segmentation.t_seg"], t_seg)
+
+
+def test_segmentation_query_rows_accumulate_by_concat_dim0():
+    """``<OBJ>`` rows arrive one per decode step, so the modality default must
+    grow dim 0 rather than replacing or concatenating on the last dim.
+    """
+    assert get_accumulation_strategy(OutputModality.SEGMENTATION) == TensorAccumulationStrategy.CONCAT_DIM0
+    assert (
+        get_accumulation_strategy(OutputModality.SEGMENTATION, "segmentation.t_seg")
+        == TensorAccumulationStrategy.CONCAT_DIM0
+    )
+
+    payload = MultimodalPayload()
+    payload.tensors["segmentation.t_seg"] = [torch.zeros(1, 4), torch.ones(1, 4)]
+    payload.consolidate_tensors(OutputModality.SEGMENTATION)
+    assert tuple(payload["segmentation.t_seg"].shape) == (2, 4)

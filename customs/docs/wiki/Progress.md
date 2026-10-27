@@ -15,6 +15,7 @@ Update this file at the end of every episode. Status: `todo` | `in-progress` | `
 | E8 | done | `customs/qwen_drive/{client_example.py,chat_template_drive.jinja,serve.sh}`; `trajectory` response field (`protocol/chat_completion.py`) + branch in `serving_chat.py`; stage 1->2 bridge `prefill_to_planner`; export ships the chat template. Verified live: direct/reasoning/VQA over HTTP, ADE vs golden identical to offline (0.045/0.055 m scene 1) |
 | E9 | done | `tests/e2e/online_serving/test_qwen_drive.py` (7 tests pass, FP8), `customs/qwen_drive/{run_e2e_test.sh,run_unit_tests.sh}`; Testing.md, Usage.md written |
 | E10 | done | ruff clean; online suite grew to 11 tests (concurrency x5, client abort, VQA streaming, planner-sft) all passing; BF16 measured with `customs/qwen_drive/deploy_bf16_16gb.yaml` (fits 2x16 GB: 1 seq, 5000 ctx); noise floor measured (`spikes/noise_floor.py`); Architecture/Usage/Testing/Risks refreshed |
+| E11 | in-progress | WeVisOne-VL: code-complete for phases A-F. `vllm_omni/model_executor/models/wevisone/` (constants, config, decoder, msda, feature_bridge, wevisone_vl, processing, pipeline), `Segmentation` payload group + non-drainable `SEGMENTATION` modality, `stage_input_processors/wevisone.py`, both registries, `deploy/wevisone_vl.yaml` + `wevisone_vl_text_only.yaml`, `model_extras/wevisone.py`, stacked-mask `mask_index` in `_create_image_choice`; `customs/wevisone/` (README, client, samples.json 11 tasks, generator, visualize, serve/run scripts, ref_golden + golden fixture); tests for parsers/bridge/decoder masks/pipeline/stage bridge/payload schema/serving choice/model_extras. CPU-runnable tests: 33 passed. Pending: hook parity + golden mask parity on GPU, L2/L4 + Buildkite wiring, dfx invalid-param cases |
 
 ## Commands run (reproducible)
 - E1: `customs/qwen_drive/setup_env.sh` then `customs/qwen_drive/env_check.sh`.
@@ -25,6 +26,22 @@ Update this file at the end of every episode. Status: `todo` | `in-progress` | `
 - E8: `customs/qwen_drive/serve.sh` then `customs/qwen_drive/docker_run.sh "python customs/qwen_drive/client_example.py --wait 900 --mode direct --scene 1 --golden customs/docs/golden"`.
 - E9: `customs/qwen_drive/run_e2e_test.sh`.
 - E6: `customs/qwen_drive/run_unit_tests.sh` (GPU 0; add `-k pipeline_forward` for the pipeline-contract test).
+- E11: `python customs/wevisone/ref_golden.py --decode-masks --tasks matting` (offline venv, GPU 0,
+  seed 1234) produced `customs/wevisone/golden/matting/`; four runs (the committed fixture plus three
+  fresh) agree on text/boxes and differ in masks by up to 5.1e-4; `bash customs/wevisone/run_golden.sh` compares
+  it; CPU tests run in the offline venv for the files
+  that do not import `vllm`:
+  `pytest -q -c /dev/null --confcutdir=tests/model_executor/models/wevisone -p no:cacheprovider -m 'not gpu and not cuda' tests/model_executor/models/wevisone/test_wevisone_parsers.py tests/model_executor/models/wevisone/test_wevisone_feature_bridge.py`.
+  Gates: `python tools/pre_commit/check_test_marks.py` and `check_spdx_header.py` (both exit 0).
+  Full L1 run must happen in docker — the host interpreter has no `vllm`.
 
 ## Next
-All episodes done. Optional follow-ups: streaming of the `trajectory` field, throughput benchmarks with larger `max_num_seqs` on the big-VRAM machine (`vllm_omni/deploy/qwen_drive.yaml`), CI wiring (Buildkite) if wanted.
+E11 is the active episode. Remaining, in order:
+1. Run the CPU tests in docker (the host interpreter has no `vllm`) — `pytest -sv tests/model_executor/models/wevisone -m 'core_model and cpu'` and the other files listed in `Testing & CI` of `WeVisOne-VL.md`.
+2. Hook-parity gate on GPU: capture hooks fire under `enforce_eager` on stage 0, captured ViT layers 5/11/17/23 and the last LM layer match the reference values.
+3. Golden mask parity + PSNR on GPU (tolerances: box 0.001, mean mask 0.02 — masks are not bit-reproducible).
+4. L2 online-serving test `tests/e2e/online_serving/test_wevisone_vl.py` (mask choice + `mask_index` pairing), and text-only pipeline smoke run without `mask_decoder.pt`.
+5. dfx invalid-param cases (unknown task, degenerate/`reference_boxes` mismatch, no `<OBJ>` token).
+6. Buildkite wiring: `omni_wevisone_vl_function` in `.buildkite/common/ci_source_file_dependencies.yml`, plus L2/L4 steps; then the offline pytest commands move into `test-ready.yml` groups.
+
+Optional follow-ups (E1-E10): streaming of the `trajectory` field, throughput benchmarks with larger `max_num_seqs` on the big-VRAM machine (`vllm_omni/deploy/qwen_drive.yaml`).

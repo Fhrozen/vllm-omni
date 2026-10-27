@@ -15,6 +15,7 @@ from vllm_omni.data_entry_keys import (
     MetaStruct,
     OmniPayload,
     OmniPayloadStruct,
+    SegmentationStruct,
     deserialize_payload,
     flatten_payload,
     serialize_payload,
@@ -117,6 +118,29 @@ class TestOmniPayloadStruct:
         assert torch.equal(s.hidden_states.last, torch.ones(2, 4))
         assert s.meta.num_processed_tokens == 7
         assert torch.equal(s.codes.ref, torch.ones(4))
+
+    def test_struct_accepts_segmentation_group(self):
+        d = {
+            "segmentation": {
+                "features": torch.zeros(4, 1024, 2, 2),
+                "grid_hw": torch.tensor([[2, 2]], dtype=torch.int32),
+                "t_seg": torch.zeros(1, 2560),
+                "boxes": torch.tensor([[0.1, 0.2, 0.3, 0.4]]),
+                "canvas": torch.full((1, 3, 4, 4), 0.25),
+                "mask_hw": torch.tensor([[4, 6]], dtype=torch.int32),
+            }
+        }
+        s = to_struct(d)
+        assert isinstance(s.segmentation, SegmentationStruct)
+        for name, tensor in d["segmentation"].items():
+            assert torch.equal(getattr(s.segmentation, name), tensor)
+        assert set(to_dict(s)) == {"segmentation"}
+        for name, tensor in to_dict(s)["segmentation"].items():
+            assert torch.equal(tensor, d["segmentation"][name])
+
+    def test_to_struct_rejects_typo_in_segmentation_subkey(self):
+        with pytest.raises(msgspec.ValidationError, match="unknown field"):
+            to_struct({"segmentation": {"feature": torch.zeros(1)}})
 
 
 class TestValidatePayload:
@@ -256,6 +280,20 @@ class TestFlattenPayload:
         flat = flatten_payload(nested)
         assert set(flat.keys()) == {"codes.audio", "latent", "meta.finished"}
 
+    def test_segmentation_group_expanded(self):
+        nested: OmniPayload = {
+            "segmentation": {
+                "features": torch.zeros(4, 1024, 2, 2),
+                "grid_hw": torch.tensor([[2, 2]], dtype=torch.int32),
+                "t_seg": torch.zeros(1, 2560),
+            }
+        }
+        flat = flatten_payload(nested)
+        assert torch.equal(flat["segmentation.features"], nested["segmentation"]["features"])
+        assert torch.equal(flat["segmentation.grid_hw"], nested["segmentation"]["grid_hw"])
+        assert torch.equal(flat["segmentation.t_seg"], nested["segmentation"]["t_seg"])
+        assert "segmentation" not in flat
+
 
 class TestUnflattenPayload:
     def test_basic_dotted_to_nested(self):
@@ -285,6 +323,17 @@ class TestUnflattenPayload:
         assert torch.equal(nested["hidden_states"]["output"], torch.tensor([1.0]))
         assert torch.equal(nested["hidden_states"]["layers"][0], torch.tensor([2.0]))
         assert torch.equal(nested["hidden_states"]["layers"][24], torch.tensor([3.0]))
+
+    def test_segmentation_group_collected(self):
+        flat = {
+            "segmentation.features": torch.zeros(1, 1024, 2, 2),
+            "segmentation.grid_hw": torch.tensor([[2, 2]], dtype=torch.int32),
+            "segmentation.t_seg": torch.zeros(2, 2560),
+        }
+        nested = unflatten_payload(flat)
+        assert set(nested.keys()) == {"segmentation"}
+        for name, tensor in flat.items():
+            assert torch.equal(nested["segmentation"][name.split(".", 1)[1]], tensor)
 
 
 class TestFlattenUnflattenRoundTrip:
@@ -333,6 +382,25 @@ class TestFlattenUnflattenRoundTrip:
         assert restored["ids"]["prompt"] == [3, 4]
         assert restored["meta"]["finished"].item() is False
         assert restored["meta"]["ar_width"] == 8
+
+    def test_round_trip_segmentation(self):
+        original: OmniPayload = {
+            "ids": {"all": [151652, 151655, 152678, 151645], "prompt": [151652, 151655]},
+            "segmentation": {
+                "features": torch.zeros(4, 1024, 2, 2),
+                "grid_hw": torch.tensor([[2, 2]], dtype=torch.int32),
+                "t_seg": torch.zeros(1, 2560),
+                "boxes": torch.tensor([[0.009, 0.065, 0.753, 1.0]]),
+                "canvas": torch.full((1, 3, 4, 4), 0.25),
+                "mask_hw": torch.tensor([[4, 6]], dtype=torch.int32),
+            },
+            "meta": {"finished": torch.tensor(True, dtype=torch.bool)},
+        }
+        restored = unflatten_payload(flatten_payload(original))
+        for name, tensor in original["segmentation"].items():
+            assert torch.equal(restored["segmentation"][name], tensor)
+        assert restored["ids"]["all"] == original["ids"]["all"]
+        assert restored["meta"]["finished"].item() is True
 
 
 class TestSerializeDeserializePayload:
@@ -408,6 +476,26 @@ class TestSerializeDeserializePayload:
         restored = deserialize_payload(wire)
         assert restored["hidden_states"]["output"].shape == (3, 4, 5)
         assert torch.allclose(restored["hidden_states"]["output"], t)
+
+    def test_segmentation_payload_round_trip(self):
+        # The stage-1 consumer reads the flat view, so every segmentation field
+        # must survive the wire and keep its dtype.
+        original: OmniPayload = {
+            "segmentation": {
+                "features": torch.arange(2 * 1024 * 2 * 2, dtype=torch.float32).reshape(2, 1024, 2, 2),
+                "grid_hw": torch.tensor([[2, 2]], dtype=torch.int32),
+                "t_seg": torch.zeros(1, 2560, dtype=torch.bfloat16),
+                "boxes": torch.tensor([[0.009, 0.065, 0.753, 1.0]], dtype=torch.float32),
+                "canvas": torch.full((1, 3, 4, 4), 0.25, dtype=torch.float32),
+                "mask_hw": torch.tensor([[4, 6]], dtype=torch.int32),
+            }
+        }
+        wire = serialize_payload(original)
+        assert isinstance(wire, AdditionalInformationPayload)
+        restored = deserialize_payload(wire)
+        for name, tensor in original["segmentation"].items():
+            assert restored["segmentation"][name].dtype == tensor.dtype
+            assert torch.equal(restored["segmentation"][name], tensor)
 
     def test_empty_payload_returns_none(self):
         assert serialize_payload({}) is None

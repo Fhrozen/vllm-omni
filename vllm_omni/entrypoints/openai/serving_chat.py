@@ -3272,6 +3272,11 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
 
         # Handle different image output formats
         images = []
+        stacked_masks = False
+        # Source slice ordinal for each converted image. Empty slices are skipped
+        # but still occupy a slot, so mask i must keep the ordinal of slice i --
+        # that is what ties mask i to box i in the text choice content.
+        mask_ordinals: list[int] = []
 
         # First check omni_outputs.images directly (for diffusion mode via from_diffusion)
         if omni_outputs.images:
@@ -3289,45 +3294,61 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
                     elif hasattr(image_data, "cpu"):  # Tensor
                         import numpy as np
 
-                        # Convert tensor to PIL Image
-                        img_array = image_data.float().detach().cpu().numpy()
-                        # Handle different tensor formats (CHW -> HWC)
-                        if img_array.ndim == 3 and img_array.shape[0] in [1, 3, 4]:
-                            img_array = np.transpose(img_array, (1, 2, 0))
-                        # Normalize to 0-255
-                        if img_array.max() <= 1.0:
-                            img_array = (img_array * 255).astype(np.uint8)
-                        else:
-                            img_array = img_array.astype(np.uint8)
-                        # Handle grayscale
-                        if img_array.ndim == 2:
-                            images.append(Image.fromarray(img_array, mode="L"))
-                        elif img_array.shape[-1] == 1:
-                            images.append(Image.fromarray(img_array.squeeze(-1), mode="L"))
-                        elif img_array.shape[-1] == 3:
-                            images.append(Image.fromarray(img_array, mode="RGB"))
-                        elif img_array.shape[-1] == 4:
-                            images.append(Image.fromarray(img_array, mode="RGBA"))
+                        # A stacked mask payload ([N, 1, H, W], one mask per
+                        # request from a pixel-decoder stage) is one image per
+                        # leading slice; a single image keeps its own rank.
+                        stacked = image_data.ndim == 4
+                        stacked_masks = stacked and image_data.shape[0] > 1
+                        slices = [image_data[i] for i in range(image_data.shape[0])] if stacked else [image_data]
+                        for slice_index, slice_tensor in enumerate(slices):
+                            if slice_tensor.numel() == 0:
+                                # A request that produced no masks still has to
+                                # occupy a slot in the per-request payload.
+                                continue
+                            mask_ordinals.append(slice_index)
+                            # Convert tensor to PIL Image
+                            img_array = slice_tensor.float().detach().cpu().numpy()
+                            # Handle different tensor formats (CHW -> HWC)
+                            if img_array.ndim == 3 and img_array.shape[0] in [1, 3, 4]:
+                                img_array = np.transpose(img_array, (1, 2, 0))
+                            # Normalize to 0-255
+                            if img_array.max() <= 1.0:
+                                img_array = (img_array * 255).astype(np.uint8)
+                            else:
+                                img_array = img_array.astype(np.uint8)
+                            # Handle grayscale
+                            if img_array.ndim == 2:
+                                images.append(Image.fromarray(img_array, mode="L"))
+                            elif img_array.shape[-1] == 1:
+                                images.append(Image.fromarray(img_array.squeeze(-1), mode="L"))
+                            elif img_array.shape[-1] == 3:
+                                images.append(Image.fromarray(img_array, mode="RGB"))
+                            elif img_array.shape[-1] == 4:
+                                images.append(Image.fromarray(img_array, mode="RGBA"))
             elif hasattr(final_res, "images") and final_res.images:
                 images = final_res.images
 
         # Convert images to base64
         image_contents = []
-        for img in images:
+        for index, img in enumerate(images):
             with BytesIO() as buffer:
                 img.save(buffer, format="PNG")
                 img_bytes = buffer.getvalue()
             img_base64 = base64.b64encode(img_bytes).decode("utf-8")
-            image_contents.append(
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/png;base64,{img_base64}",
-                    },
-                    "stage_durations": stage_durations,
-                    "peak_memory_mb": peak_memory_mb,
-                }
-            )
+            part = {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/png;base64,{img_base64}",
+                },
+                "stage_durations": stage_durations,
+                "peak_memory_mb": peak_memory_mb,
+            }
+            if stacked_masks:
+                # Ordinal of the mask within the request. Mask i corresponds to
+                # box i in the text choice content, which is where the model's
+                # structured answer lives.
+                part["mask_index"] = mask_ordinals[index]
+            image_contents.append(part)
 
         # Create message content
         if len(image_contents) == 1:

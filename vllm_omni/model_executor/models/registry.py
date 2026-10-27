@@ -306,6 +306,9 @@ _OMNI_MODELS = {
         "glm_image_ar",
         "GlmImageForConditionalGeneration",
     ),
+    ## wevisone_vl (Qwen3-VL + pixel decoder: masks / alpha mattes per <OBJ>)
+    "WeVisOneVLForConditionalGeneration": ("wevisone", "wevisone_vl", "WeVisOneVLForConditionalGeneration"),
+    "WeVisOnePixelDecoder": ("wevisone", "pixel_decoder", "WeVisOnePixelDecoder"),
     ## glm_tts
     "GLMTTSForConditionalGeneration": (
         "glm_tts",

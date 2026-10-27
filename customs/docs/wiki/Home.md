@@ -15,8 +15,9 @@ HF repo usable with `--trust-remote-code` (no `Qwen-Drive-1.0` package), and tes
 ## Rules
 - Documentation lives only in `customs/docs`. Never edit `docs/`, `recipes/`, `mkdocs.yml`.
   - Ideogram 4: nothing goes in `docs/`. Code, examples, and the user-facing README live in
-    `customs/ideogram/`. See [Ideogram-4](Ideogram-4.md) for the decision/findings record.
-- Run anything GPU/python-related in docker: `customs/qwen_drive/docker_run.sh "<cmd>"` (activates `/workspace/.venv`).
+    `customs/ideogram/`. See [Ideogram-4](Ideogram-4.md) for the decision/findings record.- WeVisOne-VL: same rule — code lives in `vllm_omni/model_executor/models/wevisone/`, examples in
+  `customs/wevisone/`, decision record in [WeVisOne-VL](WeVisOne-VL.md). The reference package
+  `wevisone_vl` is imported only by `customs/wevisone/ref_golden.py`.- Run anything GPU/python-related in docker: `customs/qwen_drive/docker_run.sh "<cmd>"` (activates `/workspace/.venv`).
 - `extra_repos/` is git-ignored; it holds the reference code (`Qwen-Drive-1.0`) and checkpoint (`Qwen-Drive-1.0-4B`).
 - vllm-omni code must never import `qwen_drive` (the reference package). It is only for golden/parity scripts.
 - At the end of every episode: update Progress.md, append to Findings.md, commit nothing unless asked.
@@ -35,3 +36,4 @@ HF repo usable with `--trust-remote-code` (no `Qwen-Drive-1.0` package), and tes
 | E8 | Online API | E7 |
 | E9 | Tests in docker | E6-E8 |
 | E10 | Hardening + final docs | E9 |
+| E11 | WeVisOne-VL pixel decoder + mask responses | E1 |

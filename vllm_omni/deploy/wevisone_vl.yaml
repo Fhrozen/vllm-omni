@@ -1,0 +1,70 @@
+# WeVisOne-VL deploy: Qwen3-VL VLM (stage 0) + pixel decoder (stage 1).
+# Topology declared in vllm_omni/model_executor/models/wevisone/pipeline.py.
+#
+# Auto-discovered default for the WeVisOne-VL checkpoints (model path segment
+# "WeVisOne-VL*", which resolves to the registered key "wevisone_vl").
+#
+# Stage 0 answers with structured text (<box>/<OBJ> spans); stage 1 turns the
+# captured ViT features, the last-decoder-layer query rows and the pixel canvas
+# into masks. Text-only tasks (detection, count, OCR) still run through stage 1,
+# which returns no masks and never loads mask_decoder.pt.
+#
+# Fields omitted from a stage fall back to StageDeployConfig dataclass defaults
+# (see vllm_omni/config/stage_config.py).
+
+async_chunk: false
+# The stage input processor needs the generated tokens to rebuild boxes, so
+# chunked handoff would split a <box> span across payloads.
+trust_remote_code: true
+dtype: bfloat16
+
+stages:
+  # Stage 0: Qwen3-VL backbone (WeVisOneVLForConditionalGeneration).
+  - stage_id: 0
+    devices: "0"
+    max_num_seqs: 2
+    max_model_len: 8192
+    max_num_batched_tokens: 8192
+    # ~8 GB of bf16 weights for the 4B checkpoint plus vision tower and KV.
+    gpu_memory_utilization: 0.85
+    enforce_eager: true
+    enable_prefix_caching: false
+    # One image per request: features, canvas and boxes are all keyed by image
+    # index, so a second image would have no request-level mapping.
+    limit_mm_per_prompt: {image: 1}
+    # The custom processor emits the pixel canvas per image. A processor-cache
+    # hit returns image hashes only, and stage 1 would never see the pixels.
+    mm_processor_cache_gb: 0
+    default_sampling_params:
+      # Greedy by default, matching the reference engine; the box spans must
+      # survive decoding for stage 1 to rebuild them.
+      temperature: 0.0
+      top_p: 0.95
+      top_k: 50
+      repetition_penalty: 1.05
+      max_tokens: 4096
+      detokenize: true
+      skip_special_tokens: false
+      stop_token_ids: [151645]
+
+  # Stage 1: pixel decoder (WeVisOnePixelDecoder).
+  - stage_id: 1
+    devices: "1"
+    max_num_seqs: 2
+    # No KV cache worth sizing here: the budget covers the 9.6M-parameter
+    # decoder plus per-request activations.
+    gpu_memory_utilization: 0.2
+    # The decoder is ported to run in fp32 (its own forward forces fp32); the
+    # alpha cascade at the 1024 canvas expands segments on cards with little
+    # headroom.
+    dtype: float32
+    enforce_eager: true
+    enable_prefix_caching: false
+    # One placeholder token per request; the real input is the payload.
+    max_model_len: 4096
+    max_num_batched_tokens: 4096
+    env:
+      PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+    default_sampling_params:
+      temperature: 0.0
+      max_tokens: 1

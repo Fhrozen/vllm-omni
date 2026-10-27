@@ -8,6 +8,8 @@ Categories under ``OmniPayload``:
     ids            – token-ID sequences
     codes          – codec / audio code tensors
     meta           – scalar metadata, control flags, shapes
+    segmentation   – pixel-decoder inputs: ViT feature maps, grid metadata,
+                     and ``<OBJ>`` query rows
 """
 
 from __future__ import annotations
@@ -79,6 +81,27 @@ class Ids(TypedDict, total=False):
     streaming_prompt_previous_codes: list[int]
 
 
+class Segmentation(TypedDict, total=False):
+    # Tensor-only fields: ``flatten_payload`` only special-cases
+    # ``hidden_states.layers``, so a nested dict of layers would not round-trip.
+    # Pre-merger ViT feature maps emitted per prefill, stacked as
+    # ``[num_capture_layers, C, H, W]`` in capture-layer order.
+    features: torch.Tensor
+    # Pre-merge (h, w) grid of the image the feature maps were captured from.
+    grid_hw: torch.Tensor
+    # Last LM decoder layer output (before the final norm) at ``<OBJ>`` token
+    # rows, accumulated per request across steps as ``[num_queries, llm_dim]`.
+    t_seg: torch.Tensor
+    # Normalized ``xyxy`` boxes parsed from the ``<box>`` spans of the response,
+    # ordered to match the ``<OBJ>`` query rows as ``[N, 4]``.
+    boxes: torch.Tensor
+    # Decoder CNN canvas: the ORIGINAL image resized bicubically to
+    # ``cnn_image_size`` (no smart-resize), as ``[1, 3, S, S]`` float RGB in [0, 1].
+    canvas: torch.Tensor
+    # Size of the original image the masks are resampled back to, as ``[2]`` (H, W).
+    mask_hw: torch.Tensor
+
+
 class OmniPayloadMeta(TypedDict, total=False):
     finished: torch.Tensor
     is_segment_finished: torch.Tensor
@@ -136,6 +159,7 @@ class OmniPayload(TypedDict, total=False):
     ids: Ids
     codes: Codes
     meta: OmniPayloadMeta
+    segmentation: Segmentation
     latent: torch.Tensor
     generated_len: int
     model_outputs: list[torch.Tensor]
@@ -196,6 +220,15 @@ class IdsStruct(_StructBase):
     speech_token: list[int] | None = None
     prior_image: list[int] | None = None
     streaming_prompt_previous_codes: list[int] | None = None
+
+
+class SegmentationStruct(_StructBase):
+    features: torch.Tensor | None = None
+    grid_hw: torch.Tensor | None = None
+    t_seg: torch.Tensor | None = None
+    boxes: torch.Tensor | None = None
+    canvas: torch.Tensor | None = None
+    mask_hw: torch.Tensor | None = None
 
 
 class MetaStruct(_StructBase):
@@ -265,6 +298,7 @@ class OmniPayloadStruct(_StructBase):
     ids: IdsStruct | None = None
     codes: CodesStruct | None = None
     meta: MetaStruct | None = None
+    segmentation: SegmentationStruct | None = None
     latent: torch.Tensor | None = None
     generated_len: int | None = None
     model_outputs: list[torch.Tensor] | None = None
@@ -283,6 +317,7 @@ _NESTED_STRUCTS: dict[str, type[_StructBase]] = {
     "ids": IdsStruct,
     "codes": CodesStruct,
     "meta": MetaStruct,
+    "segmentation": SegmentationStruct,
 }
 
 
@@ -367,7 +402,9 @@ def _dtype_to_name(dtype: torch.dtype) -> str:
 
 
 # ── Keys whose values are nested dicts (TypedDict sub-categories) ──
-_NESTED_KEYS = frozenset({"hidden_states", "embed", "ids", "codes", "meta"})
+_NESTED_KEYS = frozenset(
+    {"hidden_states", "embed", "ids", "codes", "meta", "segmentation"}
+)
 
 
 def flatten_payload(payload: Mapping[str, Any]) -> dict[str, Any]:

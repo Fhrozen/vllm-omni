@@ -142,6 +142,10 @@ from vllm_omni.model_executor.models.wan2_2.pipeline import (
     WAN2_2_PIPELINE,
     WAN2_2_TI2V_PIPELINE,
 )
+from vllm_omni.model_executor.models.wevisone.pipeline import (
+    WEVISONE_VL_PIPELINE,
+    WEVISONE_VL_TEXT_ONLY_PIPELINE,
+)
 from vllm_omni.model_executor.models.yue2.pipeline import YUE2_PIPELINE
 
 logger = init_logger(__name__)
@@ -244,6 +248,10 @@ OMNI_PIPELINES: dict[str, PipelineConfig | PipelineResolverFunc] = {
     "wan2_2_eg": WAN2_2_EG_PIPELINE,
     "wan2_2_egd": WAN2_2_EGD_PIPELINE,
     "wan2_2_ti2v": WAN2_2_TI2V_PIPELINE,
+    # The checkpoint reports model_type "qwen3_vl", so the key below is what
+    # actually resolves it; "wevisone_vl" is the canonical name.
+    "wevisone_vl": WEVISONE_VL_PIPELINE,
+    "wevisone_vl_text_only": WEVISONE_VL_TEXT_ONLY_PIPELINE,
     "yue2": YUE2_PIPELINE,
 }
 

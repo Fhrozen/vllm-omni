@@ -113,6 +113,11 @@ from vllm_omni.model_extras.vace import (
     build_image_to_video_prompt as build_vace_image_to_video_prompt,
 )
 from vllm_omni.model_extras.video_generation import VideoGenerationDefaults
+from vllm_omni.model_extras.wevisone import (
+    WEVISONE_EXTRA_BODY_PARAMS,
+    WEVISONE_EXTRA_OUTPUT_PARAMS,
+    build_x_to_text_prompt as build_wevisone_x_to_text_prompt,
+)
 
 TextToImagePromptBuilder = Callable[
     [str, str | None, int | None, int | None],
@@ -168,6 +173,7 @@ _X_TO_TEXT_SPECS: dict[str, XToTextPromptBuilder] = {
     "bagel": build_bagel_x_to_text_prompt,
     "hunyuan_image3": build_hunyuan_x_to_text_prompt,
     "mammoth_moda2": build_mammothmoda2_x_to_text_prompt,
+    "wevisone": build_wevisone_x_to_text_prompt,
 }
 
 
@@ -184,6 +190,10 @@ def get_x_to_text_model_family(model: str) -> str:
         return "hunyuan_image3"
     if "mammoth" in model_type or any("mammothmoda2" in value for value in architectures):
         return "mammoth_moda2"
+    # WeVisOne-VL checkpoints report the base Qwen3-VL config, so the family
+    # can only be resolved from the checkpoint name.
+    if "wevisone" in model.lower():
+        return "wevisone"
     return "generic"
 
 
@@ -353,6 +363,13 @@ _EXTRA_SPECS: dict[str, dict[str, Any]] = {
     # resolved per request from these keys.
     "Ideogram4Pipeline": {
         "extra_body_params": IDEOGRAM4_EXTRA_BODY_PARAMS,
+    },
+    # WeVisOne-VL is an AR pipeline: the key is the architecture name the stage
+    # reports, and the spec declares the request knobs. Output params are empty
+    # because per-request metrics is a diffusion-path feature.
+    "WeVisOneVLForConditionalGeneration": {
+        "extra_body_params": WEVISONE_EXTRA_BODY_PARAMS,
+        "extra_output_params": WEVISONE_EXTRA_OUTPUT_PARAMS,
     },
 }
 _EXTRA_SPECS["MingImageLayeredDiffusionPipeline"] = _EXTRA_SPECS["MingImageDiffusionPipeline"]

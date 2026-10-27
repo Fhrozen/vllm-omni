@@ -1,0 +1,33 @@
+# WeVisOne-VL text-only deploy: the Qwen3-VL backbone alone, no pixel decoder.
+# Topology declared in vllm_omni/model_executor/models/wevisone/pipeline.py
+# (WEVISONE_VL_TEXT_ONLY_PIPELINE), selected with --pipeline wevisone_vl_text_only.
+#
+# For detection, count, OCR and freeform answers where masks are not wanted:
+# no mask_decoder.pt is read, and a request that asks for masks has nothing to
+# decode it with. Box spans still come back in the text content.
+#
+# Use the two-stage wevisone_vl.yaml for segmentation, matting and visual_prompt.
+
+async_chunk: false
+trust_remote_code: true
+dtype: bfloat16
+
+stages:
+  - stage_id: 0
+    devices: "0"
+    max_num_seqs: 4
+    max_model_len: 8192
+    max_num_batched_tokens: 8192
+    gpu_memory_utilization: 0.85
+    enforce_eager: true
+    enable_prefix_caching: false
+    limit_mm_per_prompt: {image: 1}
+    default_sampling_params:
+      temperature: 0.0
+      top_p: 0.95
+      top_k: 50
+      repetition_penalty: 1.05
+      max_tokens: 4096
+      detokenize: true
+      skip_special_tokens: false
+      stop_token_ids: [151645]

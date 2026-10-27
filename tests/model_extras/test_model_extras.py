@@ -952,3 +952,47 @@ def test_mammothmoda2_text_to_image_prompt_builder() -> None:
             "visual_token_end_id": [168456],
         },
     }
+
+
+@pytest.mark.core_model
+@pytest.mark.cpu
+def test_wevisone_x_to_text_family_is_resolved_from_the_checkpoint_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    # WeVisOne-VL checkpoints report the base Qwen3-VL config, so model_type
+    # alone would fall through to "generic"; only the checkpoint name carries
+    # the family.
+    monkeypatch.setattr("vllm.transformers_utils.config.get_hf_file_to_dict", lambda *args: {"model_type": "qwen3_vl"})
+    assert get_x_to_text_model_family("tencent/WeVisOne-VL-4B") == "wevisone"
+
+
+@pytest.mark.core_model
+@pytest.mark.cpu
+def test_wevisone_x_to_text_prompt_builder() -> None:
+    # The family seam has no task slot, so it defaults to freeform -- the one
+    # task whose instruction is the query itself. stop_token_ids pins
+    # <|im_end|> so a box span is not cut short.
+    prompt, stop_token_ids = build_x_to_text_prompt("wevisone", "unused", "the person", has_image=True)
+    assert prompt == {"prompt": "the person", "modalities": ["text"]}
+    assert stop_token_ids == [151645]
+
+
+@pytest.mark.core_model
+@pytest.mark.cpu
+def test_wevisone_extra_params_are_declared_on_the_ar_stage() -> None:
+    # The registry key is the architecture name stage 0 reports, not a
+    # diffusion pipeline name.
+    assert get_extra_body_params("WeVisOneVLForConditionalGeneration") == frozenset(
+        {
+            "task",
+            "query",
+            "prompt",
+            "reference_boxes",
+            "decode_matting",
+            "min_pixels",
+            "max_pixels",
+            "decoder_batch_size",
+        }
+    )
+    # Per-request metrics is only populated on the diffusion path, so WeVisOne
+    # declares nothing: boxes ride in the text choice content and masks are
+    # image parts keyed by mask_index.
+    assert get_extra_output_params("WeVisOneVLForConditionalGeneration") == frozenset()

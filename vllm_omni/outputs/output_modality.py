@@ -29,6 +29,7 @@ class OutputModalityNames(str, Enum):
     AUDIO = "audio"
     LATENT = "latent"
     TOKEN_IDS = "token_ids"
+    SEGMENTATION = "segmentation"
 
 
 # Specify which output modalities may be drained when handling delta messages.
@@ -38,6 +39,7 @@ NON_DRAINABLE_MODALITIES = {
     OutputModalityNames.TEXT,
     OutputModalityNames.LATENT,
     OutputModalityNames.TOKEN_IDS,
+    OutputModalityNames.SEGMENTATION,
 }
 DRAINABLE_MODALITIES = {mod for mod in OutputModalityNames if mod not in NON_DRAINABLE_MODALITIES}
 
@@ -74,6 +76,13 @@ class OutputModality(Flag):
 
     Unlike continuous latents, these values identify discrete symbols.
     The distinction is semantic, not inferred from the tensor dtype.
+    """
+
+    SEGMENTATION = auto()
+    """Feature maps and query rows consumed by a downstream pixel decoder.
+
+    These tensors are an internal stage-to-stage contract: they are never
+    drained to a client, which receives the decoded masks under IMAGE.
     """
 
     @classmethod
