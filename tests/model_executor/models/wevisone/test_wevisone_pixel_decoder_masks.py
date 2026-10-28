@@ -114,7 +114,7 @@ def _payload():
     }
 
 
-def test_decode_request_needs_features_boxes_and_canvas():
+def test_decode_request_needs_features_and_canvas_once_boxes_exist():
     decoder = _bare_decoder()
 
     incomplete = _payload()
@@ -123,14 +123,14 @@ def test_decode_request_needs_features_boxes_and_canvas():
         decoder._decode_request(incomplete)
 
     incomplete = _payload()
-    incomplete.pop("segmentation.boxes")
-    with pytest.raises(ValueError, match="no boxes parsed from the response"):
-        decoder._decode_request(incomplete)
-
-    incomplete = _payload()
     incomplete.pop("segmentation.canvas")
     with pytest.raises(ValueError, match="no decoder canvas"):
         decoder._decode_request(incomplete)
+
+    # An empty box list is not a malformed payload, it is a request that asked
+    # for no masks: the box check runs before the feature and canvas checks so
+    # such a request never reaches them.
+    assert decoder._decode_request({"segmentation.boxes": torch.empty((0, 4))}) is None
 
 
 def test_hw_pair_accepts_plain_and_batched_shapes():
@@ -207,11 +207,19 @@ def test_payload_tensors_reach_the_decoder_on_the_stage_device():
 def test_text_only_requests_stop_before_the_sidecar_load(tmp_path):
     # Text-only requests reach stage 1 with an empty payload: that is handled by
     # returning a zero-numel tensor, not by loading the sidecar.
-    decoder = _bare_decoder()
+    decoder = pixel_decoder.WeVisOnePixelDecoder.__new__(pixel_decoder.WeVisOnePixelDecoder)
+    decoder._loaded = False
     assert pixel_decoder._segmentation_view({}) == {}
 
     no_sidecar = decoder._decode_request({"segmentation.t_seg": torch.empty(0)})
     assert no_sidecar is None
+
+    # A box-less answer still ships accumulated query rows. Nothing pairs with
+    # them, so the request is answered without masks and the sidecar is never
+    # loaded -- a checkpoint without one still serves these requests.
+    box_less = {"segmentation.t_seg": torch.zeros(4, 3), "segmentation.boxes": torch.empty((0, 4))}
+    assert decoder._decode_request(box_less) is None
+    assert not decoder._loaded
     # A local checkpoint without the sidecar fails only when masks are asked for.
     with pytest.raises(FileNotFoundError, match="Text-only tasks do not need it"):
         pixel_decoder._resolve_sidecar(str(tmp_path), None, None)

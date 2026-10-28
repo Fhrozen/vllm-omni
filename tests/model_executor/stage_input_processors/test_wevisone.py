@@ -5,8 +5,9 @@
 Covers the two contracts that decide whether a request becomes a mask request:
 boxes are reconstructed from the *generated* token ids only, and the query rows
 referenced by those boxes must actually exist in the accumulated ``t_seg``.
-Requests that fail either check ship as text-only payloads (``None``) rather
-than a payload the decoder stage could not consume.
+A request that fails either check ships an empty mask selection rather than
+nothing: the consumer stage cannot finish a request it never received input for,
+so withholding the payload would park it until the connector input-wait timeout.
 """
 
 from __future__ import annotations
@@ -121,18 +122,29 @@ def test_flat_and_nested_pooling_views_are_equivalent():
     assert set(nested) == {"ids", "segmentation", "meta"}
 
 
-def test_text_only_request_ships_without_a_payload():
+def test_mask_less_answer_ships_an_empty_mask_selection():
+    # A count_*, ocr or freeform answer has no <OBJ> box query, so there is no
+    # mask to decode. The payload still has to reach the consumer stage, which
+    # answers an empty box list with an empty mask tensor.
     request = _make_request([SEG_TOKEN_ID], [EOS])
-    assert wevisone.vlm2pixel_decoder_full_payload(None, _pooling_output(1), request) is None
+    payload = wevisone.vlm2pixel_decoder_full_payload(None, _pooling_output(1), request)
+
+    assert payload is not None
+    assert payload["segmentation"]["boxes"].shape == (0, 4)
+    assert payload["segmentation"]["t_seg"].numel() == 0
+    assert bool(payload["meta"]["finished"].item()) is True
 
 
-def test_query_rows_without_boxes_warn_before_shipping_text_only(caplog):
-    # A query row exists but no box follows it, so masks cannot be decoded and
-    # the request ships as text-only. The warning is what makes that visible.
-    request = _make_request([SEG_TOKEN_ID], [EOS])
-    with caplog.at_level(logging.WARNING):
-        assert wevisone.vlm2pixel_decoder_full_payload(None, _pooling_output(1), request) is None
-    assert "query rows but no parsed boxes" in caplog.text
+def test_box_without_obj_query_is_not_a_mask_query():
+    # detection and referring answers emit <box> spans with no <OBJ>, so there is
+    # no query row to pair them with and no mask is produced for them.
+    generated = [BOX_OPEN] + [COORD_BASE + value for value in GOLDEN_COORDS] + [BOX_CLOSE, EOS]
+    request = _make_request([IMAGE_TOKEN], generated)
+    payload = wevisone.vlm2pixel_decoder_full_payload(None, _pooling_output(len(request.all_token_ids)), request)
+
+    assert payload is not None
+    assert payload["segmentation"]["boxes"].shape == (0, 4)
+    assert payload["segmentation"]["t_seg"].numel() == 0
 
 
 def test_non_mapping_pooling_output_is_reported_as_a_gate_risk(caplog):
@@ -142,14 +154,19 @@ def test_non_mapping_pooling_output_is_reported_as_a_gate_risk(caplog):
     assert "consumer wait gate may hang" in caplog.text
 
 
-def test_query_rows_that_were_never_fed_back_are_not_fabricated(caplog):
+def test_query_rows_that_were_never_fed_back_are_reported_and_dropped(caplog):
     # The <OBJ> was sampled but never fed back into the model, so t_seg holds
     # only the prompt row and the parsed box has no row to point at. The builder
-    # reports the gap instead of pairing the box with an unrelated row.
+    # reports the gap instead of pairing the box with an unrelated row, and the
+    # request ships with no masks rather than a fabricated one.
     request = _generated_box_request()
     with caplog.at_level(logging.WARNING):
-        assert wevisone.vlm2pixel_decoder_full_payload(None, _pooling_output(1), request) is None
-    assert "usable rows" in caplog.text
+        payload = wevisone.vlm2pixel_decoder_full_payload(None, _pooling_output(1), request)
+
+    assert "no <OBJ> row was fed back in" in caplog.text
+    assert payload is not None
+    assert payload["segmentation"]["boxes"].shape == (0, 4)
+    assert payload["segmentation"]["t_seg"].numel() == 0
 
 
 def test_query_rows_are_selected_at_the_obj_positions_in_response_order():

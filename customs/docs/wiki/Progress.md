@@ -15,7 +15,7 @@ Update this file at the end of every episode. Status: `todo` | `in-progress` | `
 | E8 | done | `customs/qwen_drive/{client_example.py,chat_template_drive.jinja,serve.sh}`; `trajectory` response field (`protocol/chat_completion.py`) + branch in `serving_chat.py`; stage 1->2 bridge `prefill_to_planner`; export ships the chat template. Verified live: direct/reasoning/VQA over HTTP, ADE vs golden identical to offline (0.045/0.055 m scene 1) |
 | E9 | done | `tests/e2e/online_serving/test_qwen_drive.py` (7 tests pass, FP8), `customs/qwen_drive/{run_e2e_test.sh,run_unit_tests.sh}`; Testing.md, Usage.md written |
 | E10 | done | ruff clean; online suite grew to 11 tests (concurrency x5, client abort, VQA streaming, planner-sft) all passing; BF16 measured with `customs/qwen_drive/deploy_bf16_16gb.yaml` (fits 2x16 GB: 1 seq, 5000 ctx); noise floor measured (`spikes/noise_floor.py`); Architecture/Usage/Testing/Risks refreshed |
-| E11 | in-progress | WeVisOne-VL: code-complete for phases A-F. `vllm_omni/model_executor/models/wevisone/` (constants, config, decoder, msda, feature_bridge, wevisone_vl, processing, pipeline), `Segmentation` payload group + non-drainable `SEGMENTATION` modality, `stage_input_processors/wevisone.py`, both registries, `deploy/wevisone_vl.yaml` + `wevisone_vl_text_only.yaml`, `model_extras/wevisone.py`, stacked-mask `mask_index` in `_create_image_choice`; `customs/wevisone/` (README, client, samples.json 11 tasks, generator, visualize, serve/run scripts, ref_golden + golden fixture); tests for parsers/bridge/decoder masks/pipeline/stage bridge/payload schema/serving choice/model_extras; `customs/wevisone/{docker_run.sh,run_tests.sh,run_e2e_test.sh}` docker wrappers. Verified in docker: L1 CPU **141 passed** (224 / 8 deselected on the earlier run), golden parity **4 passed**, gates exit 0, `ruff==0.14.10` check + format clean. **L2 e2e executed on 2x RTX 3060: 2 passed in 184.54 s** (matting mask decoded, HTTP 200). Pending: hook parity + mask PSNR vs the reference on GPU, the L4 expansion file, dfx invalid-param cases |
+| E11 | in-progress | WeVisOne-VL: code-complete for phases A-F. `vllm_omni/model_executor/models/wevisone/` (constants, config, decoder, msda, feature_bridge, wevisone_vl, processing, pipeline), `Segmentation` payload group + non-drainable `SEGMENTATION` modality, `stage_input_processors/wevisone.py`, both registries, `deploy/wevisone_vl.yaml` + `wevisone_vl_text_only.yaml`, `model_extras/wevisone.py`, stacked-mask `mask_index` in `_create_image_choice`; `customs/wevisone/` (README, client, samples.json 11 tasks, generator, visualize, serve/run scripts, ref_golden + golden fixture); tests for parsers/bridge/decoder masks/pipeline/stage bridge/payload schema/serving choice/model_extras; `customs/wevisone/{docker_run.sh,run_tests.sh,run_e2e_test.sh}` docker wrappers. Verified in docker: L1 CPU **311 passed / 8 deselected** in the scoped set, golden parity **4 passed**, gates exit 0, `ruff==0.14.10` check + format clean. **L2 e2e executed on 2x RTX 3060: 2 passed in 186.68 s** (matting mask decoded, HTTP 200). **L4 expansion executed on the same machine: 4 passed in 121.28 s.** Two defects found by running L4 are fixed and covered by L1 tests: boxes must be counted as `<OBJ>`-terminated coordinate groups (`count_box_queries`), and a box-less answer must still ship a payload with an empty mask selection instead of `None` (it otherwise parked in `WAITING_FOR_INPUT` until the 600 s connector timeout). Pending: hook parity + mask PSNR vs the reference on GPU |
 
 ## Commands run (reproducible)
 - E1: `customs/qwen_drive/setup_env.sh` then `customs/qwen_drive/env_check.sh`.
@@ -62,15 +62,26 @@ Update this file at the end of every episode. Status: `todo` | `in-progress` | `
   `check_test_marks.py`, `check_spdx_header.py`, `check_forbidden_imports.py` — all exit 0; ruff 0.14.10
   check + format clean on the changed test files.
 
+- E11 L4 expansion on 2 GPUs (`WVS_LEVEL=full_model`, `WVS_GPUS="device=0,1"`):
+  `WVS_IMAGE=vllm/vllm-openai:latest WVS_GPUS="device=0,1" WVS_LEVEL=full_model \
+    bash customs/wevisone/run_e2e_test.sh tests/e2e/online_serving/test_wevisone_vl_expansion.py`
+  → **4 passed in 121.28 s**. Case 1 asks for mattes (`segmentation`, "each colored square") because only
+  matte-producing tasks emit `<OBJ>`; it answered four queries inside one `<box>` span and returned four
+  masks. Case 4 (`count_box`, no `<OBJ>`) completed in ~1.7 s with no mask parts — before the fix it hung
+  until the 600 s connector input-wait timeout. Container deps for the suite: `aenum omegaconf prettytable
+  regex diffusers pytest_asyncio pytest_xdist pyyaml pytest_mock av soundfile opencc-python-reimplemented`
+  (plus `filelock psutil requests` for the runtime helpers); `opencc` is needed by `tests/helpers/media.py`,
+  without it `tests/helpers/tests/test_assertions.py` fails 24 tests.
+
 ## Next
 E11 is the active episode. Remaining, in order:
 1. ~~Run the CPU tests in docker~~ done: 224 passed / 8 deselected via `bash customs/wevisone/run_tests.sh` (see Commands run).
 2. ~~Lint the changed files~~ done with `ruff==0.14.10`: check clean, 11 files formatted, suite re-run green.
 3. Hook-parity gate on GPU: capture hooks fire under `enforce_eager` on stage 0, captured ViT layers 5/11/17/23 and the last LM layer match the reference values.
 4. Golden mask parity + PSNR on GPU (tolerances: box 0.001, mean mask 0.02 — masks are not bit-reproducible).
-5. ~~L2 e2e test file~~ authored (`tests/e2e/online_serving/test_wevisone_vl.py`, mask choice + `mask_index`
-   pairing, plus the text-only no-sidecar case) — **still needs a GPU run**, e.g.
-   `bash customs/wevisone/run_e2e_test.sh`; L4 expansion likewise.
+5. ~~L2 e2e test file~~ authored and **executed green on 2x RTX 3060** (2 passed, mask choice + `mask_index`
+   pairing, text-only no-sidecar case) via `bash customs/wevisone/run_e2e_test.sh`; the L4 expansion likewise
+   (**4 passed in 121.28 s**, including the box-less case that previously hung).
 6. dfx invalid-param cases: **closed as not writable as implemented** — `extra_body` names are merged
    without validation and task validation is client-side, so no status code can be claimed (Findings.md).
    Reopens if server-side task validation is added.

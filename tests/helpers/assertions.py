@@ -297,7 +297,26 @@ def _decode_data_url_image_part(part: dict[str, Any]) -> Image.Image:
     return image
 
 
-_BOX_SPAN_RE = re.compile(r"<box>.*?</box>", re.IGNORECASE)
+_BOX_SPAN_RE = re.compile(r"<box>(?:.*?)(?:</box>|$)", re.DOTALL | re.IGNORECASE)
+_OBJ_QUERY_RE = re.compile(r"<OBJ>", re.IGNORECASE)
+_COORD_TOKEN_RE = re.compile(r"<(\d{1,4})>")
+_MIN_COORDS_PER_BOX = 4
+
+
+def count_box_queries(text: str) -> int:
+    """Count the boxes a structured answer pairs masks with.
+
+    Mirrors ``vllm_omni.model_executor.models.wevisone.constants.parse_seg_boxes``:
+    a box is a coordinate group terminated by ``<OBJ>`` inside a ``<box>`` span. A
+    single span can carry several comma-separated groups, so the number of spans is
+    not the number of boxes.
+    """
+    boxes = 0
+    for body in _BOX_SPAN_RE.findall(text or ""):
+        for group in _OBJ_QUERY_RE.split(body)[:-1]:
+            if len(_COORD_TOKEN_RE.findall(group)) >= _MIN_COORDS_PER_BOX:
+                boxes += 1
+    return boxes
 
 
 def assert_chat_mask_choices(
@@ -311,15 +330,17 @@ def assert_chat_mask_choices(
         {
             "key_words": list[str] | None,        # substrings required in the text part
             "mask_count": int | None,             # expected number of mask image parts
+            "min_mask_count": int | None,         # smallest acceptable number of mask image parts
             "mask_size": tuple[int, int] | None,  # expected (width, height) of every mask
             "mask_extrema": tuple[int, int] | None; # (max background gray, min foreground gray) per mask
         }
 
     Masks are emitted as one PNG per query and paired positionally with the box at the
     same rank, so mask ``i`` must carry ``mask_index == i`` and the box count in the text
-    part must cover every mask. A lone mask keeps its own rank and carries no
-    ``mask_index``, which is unambiguous because it is the only one. Masks are grayscale
-    probability maps, never RGB.
+    part must cover every mask. Boxes are counted as ``<OBJ>``-terminated coordinate
+    groups, not as ``<box>`` spans, because one span can answer several queries. A lone
+    mask keeps its own rank and carries no ``mask_index``, which is unambiguous because it
+    is the only one. Masks are grayscale probability maps, never RGB.
     """
     choices = response.get("choices")
     assert isinstance(choices, list) and choices, "Chat response is missing choices[]"
@@ -353,6 +374,9 @@ def assert_chat_mask_choices(
     expected_count = request_config.get("mask_count")
     if expected_count is not None:
         assert len(image_parts) == int(expected_count), f"Expected {int(expected_count)} masks, got {len(image_parts)}"
+    min_count = request_config.get("min_mask_count")
+    if min_count is not None:
+        assert len(image_parts) >= int(min_count), f"Expected at least {int(min_count)} masks, got {len(image_parts)}"
 
     expected_size = request_config.get("mask_size")
     masks: list[Image.Image] = []
@@ -388,17 +412,15 @@ def assert_chat_mask_choices(
                 )
             print(f"mask {rank} gray range: {minimum}-{maximum}")
 
-    boxes = _BOX_SPAN_RE.findall(text)
-    assert boxes, "The text part carries no box span, so masks cannot be paired with boxes"
-    assert len(boxes) >= len(image_parts), (
-        f"Only {len(boxes)} boxes for {len(image_parts)} masks: the pairing is shorter than the masks"
+    boxes = count_box_queries(text)
+    assert boxes, "The text part carries no <OBJ>-terminated box query, so masks cannot be paired with boxes"
+    assert boxes >= len(image_parts), (
+        f"Only {boxes} boxes for {len(image_parts)} masks: the pairing is shorter than the masks"
     )
     if run_level == "full_model":
         # The stage processor keeps ``min(len(boxes), t_seg rows)`` pairs, and a box is only
         # recorded when it is followed by ``<OBJ>``, so a complete answer pairs one mask per box.
-        assert len(boxes) == len(image_parts), (
-            f"Expected one mask per box, got {len(boxes)} boxes and {len(image_parts)} masks"
-        )
+        assert boxes == len(image_parts), f"Expected one mask per box, got {boxes} boxes and {len(image_parts)} masks"
 
 
 def assert_video_diffusion_response(

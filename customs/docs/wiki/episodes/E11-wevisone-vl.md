@@ -78,12 +78,21 @@ Model page: [WeVisOne-VL](../WeVisOne-VL.md) (goal, decisions, findings, testing
   4. `_masks_from_logits` must accept the ndim-3 `[num_queries, h, w]` layout the reference accepts;
   5. with two final-output stages the response emits one choice per final output type, so
      `assert_chat_mask_choices` collects parts across all choices and stage 0 declares
-     `final_output_type="text"`; a single-mask payload legitimately has no `mask_index`.
-  The L4 expansion file is still authored-but-not-executed.
+     `final_output_type="text"`; a single-mask payload legitimately has no `mask_index`;
+  6. boxes are counted as `<OBJ>`-terminated coordinate groups rather than `<box>` spans, because one span
+     can answer several queries (`count_box_queries` in `tests/helpers/assertions.py`);
+  7. a box-less answer must still reach the consumer stage: the processor now ships an empty mask
+     selection instead of `None`, and `_decode_request` returns `None` for an empty box list before loading
+     the sidecar.
+- L4 expansion **executed on this machine**: 4 passed in 121.28 s on 2x RTX 3060. The first case had to ask
+  for mattes (`segmentation`) instead of `referring`, because a box is only a mask query when `<OBJ>` follows
+  its coordinates; it returned four masks for the four queries in one span. The added box-less case completes
+  in ~1.7 s with no mask parts — before the fix it hung until the 600 s connector input-wait timeout.
+  L2 re-run after the `_decode_request` reorder: still 2 passed (186.68 s).
 - Buildkite wiring landed: registry anchor `x-wevisone-vl` + keys `omni_wevisone_vl_function` /
   `omni_wevisone_vl_expansion`, L2 steps in `test-ready.yml` and `test-merge.yml`, the L4 key added to the
   nightly 2-GPU step. `check_buildkite.py` exits 0 on the four files, and marker collection in docker selects
-  the intended cases (`1/2`, `2`, `3`). dfx was skipped: no WeVisOne error path is verifiable at the HTTP
+  the intended cases (`1/2`, `2`, `4`). dfx was skipped: no WeVisOne error path is verifiable at the HTTP
   layer as implemented (Findings.md).
 - `customs/wevisone/run_e2e_test.sh` added (`WVS_LEVEL`, `WVS_MODEL`, `WVS_GPUS` default `device=0,1`),
   executable, `bash -n` clean, and used for the L2 run above.
@@ -97,13 +106,14 @@ Unit tests pass in docker on the 2-GPU host, hook-parity deltas are recorded in 
 parity (boxes 0.001, mean mask 0.02) passes for `run_golden.sh`, and the manual API check confirms the
 mask/box pairing. Progress.md updated.
 **Partly met** — unit tests and golden parity pass in docker on the 2-GPU host, the L2 serving tests pass
-on this machine (mask/box pairing confirmed over HTTP, text-only path confirmed sidecar-free), and all
-pre-commit gates exit 0. Hook-parity deltas and mask PSNR vs the reference are still outstanding, as is the
-L4 expansion run.
+on this machine (mask/box pairing confirmed over HTTP, text-only path confirmed sidecar-free), the L4
+expansion passes on this machine, and all pre-commit gates exit 0. Hook-parity deltas and mask PSNR vs the
+reference are still outstanding.
 
 ## Open items
-- Execute the L4 expansion on GPUs (`WVS_LEVEL=full_model bash customs/wevisone/run_e2e_test.sh
-  tests/e2e/online_serving/test_wevisone_vl_expansion.py`). L2 is executed and green on this machine.
+- L4 expansion: closed, executed green on this machine (`WVS_LEVEL=full_model bash
+  customs/wevisone/run_e2e_test.sh tests/e2e/online_serving/test_wevisone_vl_expansion.py`). L2 is executed
+  and green on this machine.
 - dfx invalid-param cases: closed as not writable as implemented (no WeVisOne error path is verifiable at
   the HTTP layer); reopens only if server-side task validation is added.
 - Hook parity measurement and mask PSNR vs the reference (blocks all tolerance claims).

@@ -6,6 +6,7 @@ One feature per case:
 - a multi-object answer pairs exactly one mask per box
 - masks come back at the original image resolution, not the smart-resized ViT grid
 - requests with different image sizes keep their own decoder canvas
+- an answer with no ``<OBJ>`` query completes with no mask parts
 
 Run locally (two GPUs, matching the ``wevisone_vl`` CI overlay):
     WEVISONE_MODEL_PATH=/path/to/WeVisOne-VL-4B \\
@@ -74,18 +75,23 @@ def _chat_request_config(omni_server: OmniServer, image_size: tuple[int, int], t
 
 @hardware_test(res={"cuda": ["H100", "B200", "RTX3060"], "rocm": "MI325"}, num_cards=2)
 @pytest.mark.parametrize("omni_server", _SERVER, indirect=True)
-def test_multi_object_referring_pairs_exactly_one_mask_per_box(
+def test_multi_object_segmentation_pairs_exactly_one_mask_per_box(
     omni_server: OmniServer,
     online_client: OnlineOmniClient,
     run_level: str,
 ) -> None:
-    """Feature: every box in a multi-object answer gets its own mask part, in box order."""
+    """Feature: every box in a multi-object answer gets its own mask part, in box order.
+
+    The case asks for mattes, because a box is only a mask query when it is terminated by
+    ``<OBJ>``: the plain ``referring`` and ``detection`` prompts answer with boxes and never
+    reach the pixel decoder.
+    """
     image_size = (480, 360)
-    request_config = _chat_request_config(omni_server, image_size, "referring", "each of the objects")
+    request_config = _chat_request_config(omni_server, image_size, "segmentation", "each colored square")
     response = online_client.send_chat_completions_http_request(request_config)[0]
     assert_chat_mask_choices(
         response.json_body,
-        {"mask_size": image_size, "mask_extrema": (40, 215)},
+        {"min_mask_count": 2, "mask_size": image_size, "mask_extrema": (40, 215)},
         run_level=run_level,
     )
 
@@ -123,3 +129,46 @@ def test_requests_with_different_image_sizes_keep_their_own_canvas(
         request_config = _chat_request_config(omni_server, image_size, "matting", "the object")
         response = online_client.send_chat_completions_http_request(request_config)[0]
         assert_chat_mask_choices(response.json_body, {"mask_size": image_size}, run_level=run_level)
+
+
+@hardware_test(res={"cuda": ["H100", "B200", "RTX3060"], "rocm": "MI325"}, num_cards=2)
+@pytest.mark.parametrize("omni_server", _SERVER, indirect=True)
+def test_answers_without_an_obj_query_complete_without_mask_parts(
+    omni_server: OmniServer,
+    online_client: OnlineOmniClient,
+    run_level: str,
+) -> None:
+    """Feature: a box-only answer finishes with no masks instead of waiting for connector input.
+
+    A box is only a mask query when ``<OBJ>`` follows its coordinates, so the ``count_box``
+    prompt answers with boxes and nothing to decode. A full-payload consumer cannot finish a
+    request it never received input for, so the stage processor ships an empty mask selection
+    and the decoder returns an empty tensor; withholding the payload would park the request
+    until the connector input-wait timeout (``VLLM_OMNI_INPUT_WAIT_TIMEOUT_S``, 600 s by
+    default), which is longer than this client timeout.
+    """
+    image_size = (240, 180)
+    request_config = _chat_request_config(omni_server, image_size, "count_box", "the object")
+    response = online_client.send_chat_completions_http_request(request_config)[0]
+    body = response.json_body
+
+    choices = body.get("choices")
+    assert isinstance(choices, list) and choices, "Chat response is missing choices[]"
+    text = ""
+    image_parts: list[dict] = []
+    for choice in choices:
+        content = choice.get("message", {}).get("content")
+        if isinstance(content, str):
+            text = text or content
+        elif isinstance(content, list):
+            for part in content:
+                if part.get("type") == "image_url":
+                    image_parts.append(part)
+                elif part.get("type") == "text" and not text:
+                    text = part.get("text") or ""
+
+    assert text, "Chat response has no text part carrying the structured output"
+    print(f"structured text output is: {text}")
+    if run_level in {"advanced_model", "full_model"}:
+        assert "<box>" in text, "The answer carries no box span, so the request proves nothing about box-only tasks"
+    assert not image_parts, f"A box-only answer must carry no mask parts, got {len(image_parts)}"

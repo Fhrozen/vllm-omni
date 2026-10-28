@@ -171,11 +171,11 @@ Scripts: `customs/qwen_drive/spikes/{s5_vllm_vlm.py,qd_probe.py,s2_tokenize_roun
   matches it. SKU marks may only come from `tests/helpers/mark.py`, so the e2e files call
   `hardware_test(res={"cuda": ["H100", "B200"], "rocm": "MI325"}, num_cards=2)`.
 - e2e collection measured in docker: `test_wevisone_vl.py` → `1/2 tests collected (1 deselected)` with
-  `-m 'core_model'` and `2` with `-m 'advanced_model and cuda'`; the expansion file → `3` with the nightly
+  `-m 'core_model'` and `2` with `-m 'advanced_model and cuda'`; the expansion file → `4` with the nightly
   expression. Reusable mask-response checks live in `tests/helpers/assertions.py::assert_chat_mask_choices`
   (part list, `mask_index` == image-part rank, mode `L`, canvas size, gray-range gate at advanced/full
-  level, exactly one mask per box at full level); no `tests/helpers/wevisone*.py` helper was created because
-  the deploy path, model, and request config stay in the test module.
+  level, exactly one mask per box at full level, optional `min_mask_count`); no `tests/helpers/wevisone*.py`
+  helper was created because the deploy path, model, and request config stay in the test module.
 - e2e executed on 2x RTX 3060 (container `vllm/vllm-openai:latest`, `WVS_GPUS="device=0,1"`,
   `WEVISONE_MODEL_PATH=/workspace/extra_repos/WeVisOne-VL-4B`): `test_wevisone_vl.py` **2 passed in
   184.54 s**, matting case 109.74 s, server startup 98.036 s, stages `[0: 0.69 s, 1: 0.64 s]`, HTTP 200.
@@ -198,6 +198,29 @@ Scripts: `customs/qwen_drive/spikes/{s5_vllm_vlm.py,qd_probe.py,s2_tokenize_roun
   5. With two final-output stages, non-streaming `serving_chat.py` emits one choice per final output type,
      so the text choice content is a plain `str` and the masks sit in a separate choice — the assertion
      helper collects parts across all choices, and stage 0 declares `final_output_type="text"`.
+  6. Boxes must be counted as `<OBJ>`-terminated coordinate groups, not as `<box>` spans: a multi-object
+     answer emits one span holding several comma-separated groups, so a span count saw 1 box against 6 masks.
+     `tests/helpers/assertions.py::count_box_queries` mirrors `parse_seg_boxes` and the L4 case then matched.
+  7. A box is only a mask query when `<OBJ>` follows its coordinates, so the tasks that do not ask for
+     mattes (`detection`, `referring`, `point`, `count_box`, `count_point`, `ocr`, `ocr_grounding`,
+     `freeform`) never produce masks. The L4 multi-object case therefore had to ask for mattes
+     (`segmentation`) instead of `referring`.
+  8. A box-less answer hung the request: the stage input processor returned `None`, so nothing was put on
+     the connector (`send_full_payload_outputs` skips a `None` payload) and the consumer stage parked in
+     `RequestStatus.WAITING_FOR_INPUT` until `DEFAULT_INPUT_WAIT_TIMEOUT_S` = 600 s
+     (`VLLM_OMNI_INPUT_WAIT_TIMEOUT_S`) marked it `FINISHED_ERROR` — well past the 180 s client timeout.
+     The processor now always ships a payload with an empty mask selection (`boxes` shaped `(0, 4)`,
+     `t_seg` empty), and `_decode_request` returns `None` for an empty box list before loading the sidecar.
+     Measured after the fix: control request 2.8 s, `count_box` 1.7 s, `detection` 1.5 s, all HTTP 200 with
+     zero mask parts.
+- Interpretation lesson: the pre-fix warning fired on the prefill chunk for every request because
+  `segmentation.t_seg` carries every position row, not only `<OBJ>` rows — "1329 query rows" was the prefill
+  length, not the number of queries. A warning alone never proved the answer had no boxes.
+- L4 expansion executed on 2x RTX 3060: **4 passed in 121.28 s** (server startup ~80 s). The multi-object
+  segmentation case answered
+  `<ref>each colored square</ref><box><552><330><673><491><OBJ>,<579><69><639><191><OBJ>,<646><54><758><203><OBJ>,<672><266><828><472><OBJ></box>`
+  with four masks at the request size, and the box-less `count_box` case completed with no mask parts.
+  Every mask gray range was 0-254.
 - A single-mask payload carries no `mask_index` (`stacked and image_data.shape[0] > 1` in
   `_create_image_choice`); the helper allows exactly that case, and
   `tests/entrypoints/openai_api/test_serving_chat_mask_choices.py` asserts the behaviour.

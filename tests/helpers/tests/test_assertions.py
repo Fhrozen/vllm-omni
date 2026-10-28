@@ -16,6 +16,7 @@ from tests.helpers.assertions import (
     _resolve_audio_transcript,
     assert_audio_speech_response,
     assert_http_error,
+    count_box_queries,
 )
 from tests.helpers.client import OmniResponse
 
@@ -197,6 +198,38 @@ def test_pcm_transcript_opt_in_wraps_raw_int16_as_declared_rate_wav(monkeypatch,
     assert language is None
     _assert_wav_wraps_pcm(wav_bytes, pcm_bytes, sample_rate)
     assert f"sr={sample_rate}" in capsys.readouterr().out
+
+
+MULTI_OBJECT_ANSWER = (
+    "<ref>the object</ref><box>"
+    "<67><55><170><203><OBJ>,<109><380><227><547><OBJ>,<523><500><664><700><OBJ>,"
+    "<556><377><729><617><OBJ>,<712><675><809><815><OBJ>,<792><140><884><271><OBJ>"
+    "</box>"
+)
+
+
+def test_one_box_span_can_answer_several_queries():
+    # A multi-object answer puts every coordinate group in a single span, so the
+    # pairing gate must count queries rather than spans.
+    assert count_box_queries(MULTI_OBJECT_ANSWER) == 6
+
+
+def test_single_query_counts_as_one_box():
+    assert count_box_queries("<ref>the person</ref><box><9><65><753><1000><OBJ></box>") == 1
+
+
+def test_incomplete_coordinate_group_is_not_a_box():
+    # The parser needs four coordinates, so a truncated group pairs with no mask.
+    assert count_box_queries("<box><10><20><30><OBJ></box>") == 0
+
+
+def test_query_marker_outside_a_box_span_is_not_a_box():
+    assert count_box_queries("<ref>the person</ref><OBJ>") == 0
+
+
+def test_unterminated_span_still_counts_its_queries():
+    # Generation can stop before </box>, which the parser tolerates.
+    assert count_box_queries("<box><10><20><30><40><OBJ>,<50><60><70><80><OBJ>") == 2
 
 
 @pytest.mark.parametrize(

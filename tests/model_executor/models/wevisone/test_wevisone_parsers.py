@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import pytest
 
+from tests.helpers.assertions import count_box_queries
 from vllm_omni.model_executor.models.wevisone import constants
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
@@ -116,6 +117,24 @@ def test_multiple_boxes_are_ordered_by_query():
     expected = [[0.01, 0.01, 0.2, 0.2], [0.3, 0.3, 0.9, 0.9]]
     assert constants.parse_seg_boxes(response) == expected
     assert constants.parse_seg_boxes_from_ids(ids) == expected
+
+
+def test_multi_object_answer_keeps_every_query_in_one_span():
+    """Several comma-separated groups inside one span are several boxes.
+
+    The e2e pairing gate counts boxes the same way this parser does, so the two
+    must agree on the shape a multi-object answer actually takes.
+    """
+    response = (
+        "<ref>the object</ref><box>"
+        "<67><55><170><203><OBJ>,<109><380><227><547><OBJ>,<523><500><664><700><OBJ>,<OBJ>"
+        "</box>"
+    )
+    expected = [[0.067, 0.055, 0.17, 0.203], [0.109, 0.38, 0.227, 0.547], [0.523, 0.5, 0.664, 0.7]]
+    assert constants.parse_seg_boxes(response) == expected
+    assert constants.parse_seg_boxes_from_ids(_generated_ids([67, 55, 170, 203])[:-1]) == [expected[0]]
+
+    assert count_box_queries(response) == len(expected)
 
 
 @pytest.mark.parametrize(

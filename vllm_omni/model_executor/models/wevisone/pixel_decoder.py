@@ -266,6 +266,10 @@ class WeVisOnePixelDecoder(nn.Module):
         it into an empty tensor so the request still has a per-request payload.
         """
         seg = _segmentation_view(info)
+        boxes = seg.get("boxes")
+        if not isinstance(boxes, Tensor) or boxes.numel() == 0:
+            return None
+
         t_seg = seg.get("t_seg")
         if not isinstance(t_seg, Tensor) or t_seg.numel() == 0:
             return None
@@ -274,7 +278,6 @@ class WeVisOnePixelDecoder(nn.Module):
 
         features = seg.get("features")
         grid_hw = seg.get("grid_hw")
-        boxes = seg.get("boxes")
         canvas = seg.get("canvas")
         mask_hw = seg.get("mask_hw")
         if not isinstance(features, Tensor) or features.numel() == 0:
@@ -283,8 +286,6 @@ class WeVisOnePixelDecoder(nn.Module):
             )
         if features.ndim != 4:
             raise ValueError(f"feature payload must be [layers, C, H, W], got {tuple(features.shape)}")
-        if not isinstance(boxes, Tensor) or boxes.numel() == 0:
-            raise ValueError("a request with <OBJ> queries carries no boxes parsed from the response")
         if not isinstance(canvas, Tensor):
             raise ValueError("a request with <OBJ> queries carries no decoder canvas")
 
