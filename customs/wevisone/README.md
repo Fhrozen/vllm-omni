@@ -5,7 +5,7 @@ All WeVisOne-VL example files live in `customs/wevisone/`; the decision/findings
 
 Reference port of `Tencent/WeChat Vision WeVisOne-VL` as a two-stage pipeline:
 
-```
+```text
 image + instruction -> Qwen3-VL thinker (text answer, captured ViT features, last-layer <OBJ> rows)
                     -> pixel decoder -> masks / alpha mattes
 ```
@@ -35,7 +35,10 @@ and `prompt_transform_func` runs after the chat template. Build the instruction 
 A mask request returns two choices: the text choice keeps the raw structured answer
 (`<box>` spans survive because the stage must not strip special tokens), and the image choice
 carries one `image_url` part per mask with a `mask_index`. **Mask `i` is the answer to box
-`i`**, so a client pairs them by enumerating both.
+`i`**, so a client pairs them by enumerating both. Both stages are final outputs, so the text and
+the masks can sit in different choices — read the parts of every choice rather than assuming one
+mixed list. `mask_index` is only emitted for multi-mask answers: a single-mask payload has no
+`mask_index` and its rank is unambiguous.
 
 ```json
 {
@@ -64,7 +67,7 @@ python customs/wevisone/visualize.py --result customs/wevisone/output/matting
 Per task, against a running server:
 
 | Task | Example | Masks |
-|---|---|---|
+| --- | --- | --- |
 | `detection` | `python customs/wevisone/openai_request_example.py --task detection --query "person\nchair"` | no |
 | `referring` | `... --task referring --query "the largest object in the foreground"` | no |
 | `point` | `... --task point --query "person"` | no |
@@ -85,8 +88,16 @@ them.
 ## Golden fixtures
 
 ```bash
-customs/qwen_drive/docker_run.sh "python customs/wevisone/ref_golden.py --decode-masks"
+bash customs/wevisone/run_golden.sh "--tasks matting"   # or: bash customs/wevisone/run_golden.sh
 ```
+
+Every script here runs through `customs/wevisone/docker_run.sh`, the WeVisOne counterpart of
+`customs/qwen_drive/docker_run.sh`: same image, same shared `.venv`, same `/workspace` mount
+(`PYTHONPATH=/workspace`, so `vllm_omni` is importable without an editable install), plus
+`--entrypoint bash` (the `vllm/vllm-openai` image has `ENTRYPOINT ["vllm","serve"]`, which would
+otherwise swallow the command). Set `WVS_IMAGE`/`WVS_GPUS` to override; `WVS_IMAGE=vllm/vllm-openai:latest`
+is enough when the builder image is not available locally. Create the venv once with
+`customs/qwen_drive/setup_env.sh`.
 
 Fixtures land under `customs/wevisone/golden/<task>/` (`result.json` + `masks/mask_NNN.npy`),
 with the inputs taken from `samples.json`. `generate_samples.py --golden` compares a served
@@ -101,11 +112,39 @@ use tolerances rather than exact equality.
 ## Files
 
 | File | Purpose |
-|---|---|
+| --- | --- |
 | `serve.sh` | docker wrapper that serves the two-stage pipeline on port 8091 |
 | `samples.json` | shared per-task inputs (single source of truth) |
 | `openai_request_example.py` | one request, prints and optionally saves the result |
 | `generate_samples.py` | runs `samples.json` against the server and compares with golden |
 | `run_samples.sh` | docker wrapper for `generate_samples.py` |
+| `run_tests.sh` | docker wrapper that runs the CPU unit tests on GPU 0 (`WVS_MARKERS` selects the marker expression) |
+| `run_e2e_test.sh` | docker wrapper that runs the online-serving e2e tests (`WVS_LEVEL` sets `-m` and `--run-level`, `WVS_GPUS` defaults to `device=0,1`) |
+| `docker_run.sh` | shared docker wrapper the scripts above delegate to |
 | `visualize.py` | tints each mask and outlines its box on the source image |
 | `ref_golden.py` / `run_golden.sh` | reference oracle that writes the golden fixtures |
+
+## CI wiring
+
+Collection is wired through `.buildkite` (verified by `check_buildkite.py` and by pytest collection, not yet
+executed on GPUs): `omni_wevisone_vl_function` for `tests/e2e/online_serving/test_wevisone_vl.py`
+(L2, `test-ready.yml` + `test-merge.yml`) and `omni_wevisone_vl_expansion` for
+`test_wevisone_vl_expansion.py` (L4, nightly 2-GPU step), both keyed on the `x-wevisone-vl` anchor in
+`.buildkite/common/ci_source_file_dependencies.yml`.
+
+```bash
+# local, two GPUs, the test starts its own server
+WEVISONE_MODEL_PATH=/path/to/WeVisOne-VL-4B \
+  pytest -s -v tests/e2e/online_serving/test_wevisone_vl.py \
+  -m 'core_model and omni and cards_2' --run-level core_model
+
+# CI-like nightly selection
+VLLM_WORKER_MULTIPROC_METHOD=spawn HF_HUB_DOWNLOAD_TIMEOUT=300 \
+  pytest -s -v tests/e2e/online_serving/test_wevisone_vl_expansion.py \
+  -m 'full_model and H100 and B200 and omni and cards_2' --run-level full_model
+
+# through the docker wrapper
+bash customs/wevisone/run_e2e_test.sh
+WVS_LEVEL=full_model bash customs/wevisone/run_e2e_test.sh \
+    tests/e2e/online_serving/test_wevisone_vl_expansion.py
+```

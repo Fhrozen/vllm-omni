@@ -60,7 +60,10 @@ def main() -> None:
 
     for index, entry in enumerate(pairing):
         mask_path = result_dir / "masks" / f"mask_{entry['mask_index']:03d}"
-        candidate = next((p for p in (mask_path.with_suffix(".npy"), mask_path.with_suffix(".png")) if p.is_file()), None)
+        candidate = next(
+            (p for p in (mask_path.with_suffix(".npy"), mask_path.with_suffix(".png")) if p.is_file()),
+            None,
+        )
         if candidate is None:
             print(f"mask {entry['mask_index']}: no file under {result_dir / 'masks'}")
             continue

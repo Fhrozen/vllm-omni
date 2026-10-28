@@ -41,7 +41,7 @@ if not (REFERENCE_ROOT / "wevisone_vl").is_dir():
     raise SystemExit(f"reference package not found: {REFERENCE_ROOT}")
 sys.path.insert(0, str(REFERENCE_ROOT))
 
-from wevisone_vl.engine import DEFAULT_MODEL_ID, parse_seg_boxes  # noqa: E402
+from wevisone_vl.engine import parse_seg_boxes  # noqa: E402
 from wevisone_vl.prompts import TASKS, build_prompt  # noqa: E402
 
 FIXED_IMAGE = REFERENCE_ROOT / "assets" / "demo" / "seabreeze.jpg"
@@ -57,9 +57,7 @@ def _write_mask_pair(masks_dir: Path, index: int, mask: np.ndarray) -> str:
     masks_dir.mkdir(parents=True, exist_ok=True)
     array = np.asarray(mask, dtype=np.float32)
     np.save(masks_dir / f"mask_{index:03d}.npy", array)
-    Image.fromarray(np.uint8(np.clip(array, 0.0, 1.0) * 255), mode="L").save(
-        masks_dir / f"mask_{index:03d}.png"
-    )
+    Image.fromarray(np.uint8(np.clip(array, 0.0, 1.0) * 255), mode="L").save(masks_dir / f"mask_{index:03d}.png")
     return f"masks/mask_{index:03d}.npy"
 
 

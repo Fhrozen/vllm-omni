@@ -25,17 +25,17 @@ boxes are compared for them.
 from __future__ import annotations
 
 import argparse
-import base64
 import io
 import json
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pybase64 as base64
 import requests
+from openai_request_example import DEFAULT_URL, RequestSpec, build_payload, parse_response, write_result
 from PIL import Image
 
-from openai_request_example import DEFAULT_URL, RequestSpec, build_payload, parse_response, write_result
 from vllm_omni.model_executor.models.wevisone.constants import parse_seg_boxes
 
 SAMPLES_FILE = Path(__file__).resolve().parent / "samples.json"

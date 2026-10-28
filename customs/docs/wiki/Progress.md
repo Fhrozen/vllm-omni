@@ -15,7 +15,7 @@ Update this file at the end of every episode. Status: `todo` | `in-progress` | `
 | E8 | done | `customs/qwen_drive/{client_example.py,chat_template_drive.jinja,serve.sh}`; `trajectory` response field (`protocol/chat_completion.py`) + branch in `serving_chat.py`; stage 1->2 bridge `prefill_to_planner`; export ships the chat template. Verified live: direct/reasoning/VQA over HTTP, ADE vs golden identical to offline (0.045/0.055 m scene 1) |
 | E9 | done | `tests/e2e/online_serving/test_qwen_drive.py` (7 tests pass, FP8), `customs/qwen_drive/{run_e2e_test.sh,run_unit_tests.sh}`; Testing.md, Usage.md written |
 | E10 | done | ruff clean; online suite grew to 11 tests (concurrency x5, client abort, VQA streaming, planner-sft) all passing; BF16 measured with `customs/qwen_drive/deploy_bf16_16gb.yaml` (fits 2x16 GB: 1 seq, 5000 ctx); noise floor measured (`spikes/noise_floor.py`); Architecture/Usage/Testing/Risks refreshed |
-| E11 | in-progress | WeVisOne-VL: code-complete for phases A-F. `vllm_omni/model_executor/models/wevisone/` (constants, config, decoder, msda, feature_bridge, wevisone_vl, processing, pipeline), `Segmentation` payload group + non-drainable `SEGMENTATION` modality, `stage_input_processors/wevisone.py`, both registries, `deploy/wevisone_vl.yaml` + `wevisone_vl_text_only.yaml`, `model_extras/wevisone.py`, stacked-mask `mask_index` in `_create_image_choice`; `customs/wevisone/` (README, client, samples.json 11 tasks, generator, visualize, serve/run scripts, ref_golden + golden fixture); tests for parsers/bridge/decoder masks/pipeline/stage bridge/payload schema/serving choice/model_extras. CPU-runnable tests: 33 passed. Pending: hook parity + golden mask parity on GPU, L2/L4 + Buildkite wiring, dfx invalid-param cases |
+| E11 | in-progress | WeVisOne-VL: code-complete for phases A-F. `vllm_omni/model_executor/models/wevisone/` (constants, config, decoder, msda, feature_bridge, wevisone_vl, processing, pipeline), `Segmentation` payload group + non-drainable `SEGMENTATION` modality, `stage_input_processors/wevisone.py`, both registries, `deploy/wevisone_vl.yaml` + `wevisone_vl_text_only.yaml`, `model_extras/wevisone.py`, stacked-mask `mask_index` in `_create_image_choice`; `customs/wevisone/` (README, client, samples.json 11 tasks, generator, visualize, serve/run scripts, ref_golden + golden fixture); tests for parsers/bridge/decoder masks/pipeline/stage bridge/payload schema/serving choice/model_extras; `customs/wevisone/{docker_run.sh,run_tests.sh,run_e2e_test.sh}` docker wrappers. Verified in docker: L1 CPU **141 passed** (224 / 8 deselected on the earlier run), golden parity **4 passed**, gates exit 0, `ruff==0.14.10` check + format clean. **L2 e2e executed on 2x RTX 3060: 2 passed in 184.54 s** (matting mask decoded, HTTP 200). Pending: hook parity + mask PSNR vs the reference on GPU, the L4 expansion file, dfx invalid-param cases |
 
 ## Commands run (reproducible)
 - E1: `customs/qwen_drive/setup_env.sh` then `customs/qwen_drive/env_check.sh`.
@@ -34,14 +34,49 @@ Update this file at the end of every episode. Status: `todo` | `in-progress` | `
   `pytest -q -c /dev/null --confcutdir=tests/model_executor/models/wevisone -p no:cacheprovider -m 'not gpu and not cuda' tests/model_executor/models/wevisone/test_wevisone_parsers.py tests/model_executor/models/wevisone/test_wevisone_feature_bridge.py`.
   Gates: `python tools/pre_commit/check_test_marks.py` and `check_spdx_header.py` (both exit 0).
   Full L1 run must happen in docker — the host interpreter has no `vllm`.
+- E11 docker (image `vllm/vllm-openai:latest`, shared `.venv`, `--entrypoint bash`, GPU 0):
+  `WVS_IMAGE=vllm/vllm-openai:latest bash customs/wevisone/run_tests.sh` → **224 passed, 8 deselected**;
+  `WVS_MARKERS='local_model and cpu' bash customs/wevisone/run_tests.sh tests/model_executor/models/wevisone/test_wevisone_golden_parity.py`
+  → **4 passed**; all four `tools/pre_commit` checks exit 0.
+- E11 e2e on 2 GPUs (`WVS_GPUS="device=0,1"`, weights from `extra_repos/WeVisOne-VL-4B`):
+  `WVS_IMAGE=vllm/vllm-openai:latest WVS_GPUS="device=0,1" bash customs/wevisone/run_e2e_test.sh`
+  → **2 passed in 184.54 s** (matting 109.74 s, startup 98.036 s). Write the log to a file and grep it
+  rather than piping through `tail`, which hides the failure lines.
+  Two test bugs and one implementation deviation were fixed to get there: the stage-processor fixture now builds the
+  nested (`{"segmentation": {...}}`) view of `pooling_output` instead of the bare group dict, the serving-chat mask
+  fixture uses the real `[N, 1, H, W]` shape, and box↔query pairing follows the reference `min(len(boxes), t_seg rows)`
+  positional rule instead of inventing pairings.
+  Lint with the pre-commit pin (`ruff==0.14.10`, installed in the shared venv): `ruff check` is clean on every
+  WeVisOne file; 11 files needed formatting (typing modernisation, import sorting, 2 unused imports, 1 dead local,
+  2 long lines under `customs/wevisone/`), and the suite re-ran green afterwards (224 passed / 8 deselected).
+  `customs/wevisone/docker_run.sh` now exports `PYTHONPATH=/workspace` so the `customs/` scripts can import
+  `vllm_omni` from the mount.
+- E11 e2e + CI wiring (authored, collection-verified, gate-verified — execution needs GPUs):
+  `tests/e2e/online_serving/test_wevisone_vl.py` (2 cases) and
+  `test_wevisone_vl_expansion.py` (3 cases) with the shared helper
+  `tests/helpers/assertions.py::assert_chat_mask_choices`; collection measured in docker
+  (`1/2` ready, `2` merge, `3` nightly); registry key `omni_wevisone_vl_function` +
+  `omni_wevisone_vl_expansion`; `customs/wevisone/run_e2e_test.sh` (`WVS_LEVEL`, `WVS_MODEL`,
+  `WVS_GPUS` default `device=0,1`) is executable and `bash -n` clean but has never been run.
+  Gates re-run after the last YAML edit: `check_buildkite.py` (with the four files passed explicitly),
+  `check_test_marks.py`, `check_spdx_header.py`, `check_forbidden_imports.py` — all exit 0; ruff 0.14.10
+  check + format clean on the changed test files.
 
 ## Next
 E11 is the active episode. Remaining, in order:
-1. Run the CPU tests in docker (the host interpreter has no `vllm`) — `pytest -sv tests/model_executor/models/wevisone -m 'core_model and cpu'` and the other files listed in `Testing & CI` of `WeVisOne-VL.md`.
-2. Hook-parity gate on GPU: capture hooks fire under `enforce_eager` on stage 0, captured ViT layers 5/11/17/23 and the last LM layer match the reference values.
-3. Golden mask parity + PSNR on GPU (tolerances: box 0.001, mean mask 0.02 — masks are not bit-reproducible).
-4. L2 online-serving test `tests/e2e/online_serving/test_wevisone_vl.py` (mask choice + `mask_index` pairing), and text-only pipeline smoke run without `mask_decoder.pt`.
-5. dfx invalid-param cases (unknown task, degenerate/`reference_boxes` mismatch, no `<OBJ>` token).
-6. Buildkite wiring: `omni_wevisone_vl_function` in `.buildkite/common/ci_source_file_dependencies.yml`, plus L2/L4 steps; then the offline pytest commands move into `test-ready.yml` groups.
+1. ~~Run the CPU tests in docker~~ done: 224 passed / 8 deselected via `bash customs/wevisone/run_tests.sh` (see Commands run).
+2. ~~Lint the changed files~~ done with `ruff==0.14.10`: check clean, 11 files formatted, suite re-run green.
+3. Hook-parity gate on GPU: capture hooks fire under `enforce_eager` on stage 0, captured ViT layers 5/11/17/23 and the last LM layer match the reference values.
+4. Golden mask parity + PSNR on GPU (tolerances: box 0.001, mean mask 0.02 — masks are not bit-reproducible).
+5. ~~L2 e2e test file~~ authored (`tests/e2e/online_serving/test_wevisone_vl.py`, mask choice + `mask_index`
+   pairing, plus the text-only no-sidecar case) — **still needs a GPU run**, e.g.
+   `bash customs/wevisone/run_e2e_test.sh`; L4 expansion likewise.
+6. dfx invalid-param cases: **closed as not writable as implemented** — `extra_body` names are merged
+   without validation and task validation is client-side, so no status code can be claimed (Findings.md).
+   Reopens if server-side task validation is added.
+7. ~~Buildkite wiring~~ done: `omni_wevisone_vl_function` / `omni_wevisone_vl_expansion` in
+   `.buildkite/common/ci_source_file_dependencies.yml`, L2 steps in `test-ready.yml` and `test-merge.yml`,
+   L4 key added to the nightly 2-GPU step; `check_buildkite.py` exits 0 and the marker expressions collect
+   the intended cases.
 
 Optional follow-ups (E1-E10): streaming of the `trajectory` field, throughput benchmarks with larger `max_num_seqs` on the big-VRAM machine (`vllm_omni/deploy/qwen_drive.yaml`).

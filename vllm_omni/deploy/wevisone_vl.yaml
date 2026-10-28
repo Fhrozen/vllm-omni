@@ -12,6 +12,7 @@
 # Fields omitted from a stage fall back to StageDeployConfig dataclass defaults
 # (see vllm_omni/config/stage_config.py).
 
+pipeline: wevisone_vl
 async_chunk: false
 # The stage input processor needs the generated tokens to rebuild boxes, so
 # chunked handoff would split a <box> span across payloads.
@@ -22,6 +23,15 @@ stages:
   # Stage 0: Qwen3-VL backbone (WeVisOneVLForConditionalGeneration).
   - stage_id: 0
     devices: "0"
+    # The architectures pin is required, not cosmetic: the checkpoint's
+    # config.json self-identifies as Qwen3VLForConditionalGeneration, and
+    # vLLM resolves the multimodal processor from hf_config.architectures
+    # rather than the stage's model_arch. Without the pin the base Qwen3-VL
+    # processor runs and the pixel canvas is never produced, so stage 1 has
+    # nothing to decode. Do NOT override model_type: the backbone's own
+    # model_type check needs it to stay qwen3_vl.
+    hf_overrides:
+      architectures: ["WeVisOneVLForConditionalGeneration"]
     max_num_seqs: 2
     max_model_len: 8192
     max_num_batched_tokens: 8192

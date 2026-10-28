@@ -8,8 +8,9 @@ the prompt family must stay byte-identical to the released checkpoint.
 
 from __future__ import annotations
 
-import re
-from typing import Iterable, Sequence
+from collections.abc import Iterable, Sequence
+
+import regex as re
 
 SYSTEM_PROMPT = "You are a helpful assistant."
 
@@ -115,9 +116,8 @@ def build_prompt(
     if task == "count_point":
         return f"How many {text_query or 'objects'} in the image?"
     if task in {"segmentation", "matting"}:
-        return (
-            "Locate the instances that match the following description and "
-            "provide the alpha mattes: " + _phrase(query)
+        return "Locate the instances that match the following description and provide the alpha mattes: " + _phrase(
+            query
         )
     if task == "ocr":
         return "detect all the word in the box format"
@@ -127,10 +127,7 @@ def build_prompt(
         width, height = image_size
         coords = _box_tokens(reference_boxes or [], width, height)
         visual_prompt = f"<ref>object 1</ref><box>{coords}</box>"
-        return (
-            "Locate all similar objects in the image based on the reference boxes: "
-            + visual_prompt
-        )
+        return "Locate all similar objects in the image based on the reference boxes: " + visual_prompt
     return text_query
 
 

@@ -8,8 +8,7 @@ Ported from the Tencent WeVisOne-VL reference implementation (Apache-2.0).
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, Optional, Tuple
-
+from typing import Any
 
 ARCHITECTURE_VERSION = "wevisone_vl_v1"
 
@@ -19,7 +18,7 @@ class Qwen3VLSegConfig:
     """Only fields that instantiate the released 9.6M-parameter decoder."""
 
     architecture_version: str = ARCHITECTURE_VERSION
-    vision_feature_layers: Tuple[int, ...] = (5, 11, 17, 23)
+    vision_feature_layers: tuple[int, ...] = (5, 11, 17, 23)
 
     hidden_dim: int = 192
     mask_feature_dim: int = 64
@@ -40,11 +39,11 @@ class Qwen3VLSegConfig:
     alpha_cascade_blocks: int = 2
     cnn_image_size: int = 1024
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, values: Optional[Dict[str, Any]]) -> "Qwen3VLSegConfig":
+    def from_dict(cls, values: dict[str, Any] | None) -> Qwen3VLSegConfig:
         if not values:
             return cls()
         known = cls.__dataclass_fields__  # type: ignore[attr-defined]

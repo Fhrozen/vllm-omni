@@ -40,6 +40,11 @@ WEVISONE_VL_PIPELINE = PipelineConfig(
             model_stage="wevisone_vl",
             execution_type=StageExecutionType.LLM_AR,
             input_sources=(),
+            # Both stages are client-visible: stage 0 carries the box spans, stage 1
+            # carries the masks. Mask i answers box i, so dropping either half of the
+            # response would leave the pairing unverifiable.
+            final_output=True,
+            final_output_type="text",
             owns_tokenizer=True,
             requires_multimodal_data=True,
             engine_output_type="text+segmentation",

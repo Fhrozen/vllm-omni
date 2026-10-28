@@ -22,6 +22,7 @@ from vllm_omni.model_extras import (
     get_x_to_text_model_family,
     should_init_extra_args_for_non_diffusion_stages,
     should_preserve_reference_image_size,
+    treats_chat_images_as_model_input,
 )
 
 
@@ -307,6 +308,18 @@ def test_minimax_h3_preserves_reference_image_size(model_class_name: str) -> Non
         model_class_name,
         model="MiniMaxAI/MiniMax-H3",
     )
+
+
+@pytest.mark.core_model
+@pytest.mark.cpu
+def test_treats_chat_images_as_model_input() -> None:
+    assert treats_chat_images_as_model_input("WeVisOneVLForConditionalGeneration")
+    # Serving resolves the model class from the image-producing stage, so the
+    # capability declared on the VLM must also resolve from the decoder name.
+    assert treats_chat_images_as_model_input("WeVisOnePixelDecoder")
+    assert not treats_chat_images_as_model_input("BagelPipeline")
+    assert not treats_chat_images_as_model_input("UnknownModel")
+    assert not treats_chat_images_as_model_input(None)
 
 
 @pytest.mark.core_model

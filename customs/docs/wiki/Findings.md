@@ -140,6 +140,72 @@ Scripts: `customs/qwen_drive/spikes/{s5_vllm_vlm.py,qd_probe.py,s2_tokenize_roun
   floats to uint8 by truncation (0.5 -> 127), and sets `mask_index` only for stacked multi-mask answers,
   with ordinals recorded after the skip. Boxes stay in the text choice content because `metrics` is only
   populated on the diffusion serving path (`WEVISONE_EXTRA_OUTPUT_PARAMS = frozenset()`).
-- Host limitation (not yet resolved): the docker image is unavailable (Docker Hub 401) and the host
-  interpreter has no `vllm`, so L1 pytest cannot run here. Only the files that do not import `vllm` were
-  executed (33 passed). Hook parity and mask PSNR vs the reference remain unmeasured.
+- Host limitation resolved by using the local image: the builder image cannot be pulled (Docker Hub 401)
+  and the host interpreter has no `vllm`, but `vllm/vllm-openai:latest` (vllm 0.32.0, torch 2.13.0+cu130)
+  runs the whole L1 CPU set through `customs/wevisone/docker_run.sh`. That image has
+  `ENTRYPOINT ["vllm","serve"]`, so the wrapper overrides `--entrypoint bash`; the shared `.venv` created by
+  `customs/qwen_drive/setup_env.sh` is visible through the `/workspace` mount. Measured: L1 CPU
+  **224 passed / 8 deselected** (`bash customs/wevisone/run_tests.sh`), golden parity **4 passed**, four
+  `tools/pre_commit` checks exit 0. Hook parity and mask PSNR vs the reference remain unmeasured.
+- Pairing rule taken from the reference engine (`wevisone_vl/engine.py`): `count = min(len(boxes), t_seg rows)`
+  with positional pairing of box `i` to query row `i`, so surplus `<OBJ>` rows are dropped rather than paired
+  with invented boxes. Boxes are recorded only when followed by `<OBJ>` (`SEG_RE`, `SEG_SPECIAL_TOKENS = ("<OBJ>",)`);
+  `<OBJ>` = 152678 and the coordinate-token base is 151669 (vocab 152680).
+- `pooling_output` reaches a stage input processor in two views — nested `{"segmentation": {...}}` or the
+  flattened `segmentation.<key>` form — and the CPU test now builds the nested view. Building the bare group
+  dict makes `_seg_field` read `None` and the processor return `None`, which looks like a torch-instance
+  problem but is a fixture bug (single torch install, `isinstance` verified inside pytest).
+- `pytest --run-level` accepts only `core_model`/`advanced_model`/`full_model`; `local_model` tests are
+  selected with `-m` alone.
+- dfx invalid-param cases are not writable for WeVisOne as implemented: `serving_chat.py` merges
+  `extra_body` names without validating them (`get_extra_body_params`, line 480), and task validation lives
+  in `build_prompt`, which the examples call client-side. Only endpoint-generic cases (malformed JSON 400,
+  missing `messages` 400 `Field required`, model mismatch 404) are defensible on this path. The server-side
+  WeVisOne errors — missing sidecar `FileNotFoundError` at decode time, missing `<OBJ>` `ValueError`, shape
+  guards — have an unverified HTTP status mapping, so no dfx file was added and no status code is claimed.
+- `tools/pre_commit/check_buildkite.py` validates only the files it is given: with no arguments it renders
+  nothing and exits 0, which reads as a pass. `check_jsonschema` is absent from the image, so install it
+  (`pip install --target /tmp/js check-jsonschema`) and run the gate with `PYTHONPATH=/tmp/js`.
+- `hardware_test` emits one SKU mark per CUDA SKU when the value is a list, which is required to match the
+  nightly expression `full_model and H100 and B200 and omni and cards_2`; a single `"H100"` string never
+  matches it. SKU marks may only come from `tests/helpers/mark.py`, so the e2e files call
+  `hardware_test(res={"cuda": ["H100", "B200"], "rocm": "MI325"}, num_cards=2)`.
+- e2e collection measured in docker: `test_wevisone_vl.py` → `1/2 tests collected (1 deselected)` with
+  `-m 'core_model'` and `2` with `-m 'advanced_model and cuda'`; the expansion file → `3` with the nightly
+  expression. Reusable mask-response checks live in `tests/helpers/assertions.py::assert_chat_mask_choices`
+  (part list, `mask_index` == image-part rank, mode `L`, canvas size, gray-range gate at advanced/full
+  level, exactly one mask per box at full level); no `tests/helpers/wevisone*.py` helper was created because
+  the deploy path, model, and request config stay in the test module.
+- e2e executed on 2x RTX 3060 (container `vllm/vllm-openai:latest`, `WVS_GPUS="device=0,1"`,
+  `WEVISONE_MODEL_PATH=/workspace/extra_repos/WeVisOne-VL-4B`): `test_wevisone_vl.py` **2 passed in
+  184.54 s**, matting case 109.74 s, server startup 98.036 s, stages `[0: 0.69 s, 1: 0.64 s]`, HTTP 200.
+  The matting response was `<ref>the object</ref><box><88><255><462><815><OBJ></box>` with mask 0 gray
+  range 0-254. Hook-parity deltas and mask PSNR vs the reference are still unmeasured.
+- Memory budget measured on a 12 GB card with the CI overlay (`gpu_memory_utilization: 0.90`,
+  `skip_mm_profiling: true`, `max_model_len: 4096`, `max_num_seqs: 1`): bf16 weights 9.14-9.23 GiB, KV
+  cache 1.12 GiB (8,176 tokens), peak activation 0.15 GiB, CUDA graph 0 GiB (`enforce_eager`), init 9.4 s.
+  Stage 1 runs fp32 at `cnn_image_size` 1024 with `gpu_memory_utilization: 0.4` on the second card.
+- Five root causes found by running the e2e on this machine, each fixed and covered by an L1 test:
+  1. `Qwen3VLMultiModalProcessor._apply_hf_processor_main` calls `info.ctx.call_hf_processor` directly,
+     so `_call_hf_processor` never fires; `_postprocess_hf_mm_data` is the only hook reached on both the
+     plain and cached paths, and the processor hook now lives there (container probe item keys:
+     `image_grid_thw`, `pixel_values`, `wevisone_canvas`, `wevisone_hw`).
+  2. `ProcessorBatchItems.get_processor_data()` keys image data as `images`, not `image`.
+  3. The canvas fields are `keep_on_cpu=True` for cross-stage serialisation, so the decoder must move
+     payload tensors to `vllm_config.device_config.device` before the conv forward.
+  4. `WeVisOneMaskDecoder._forward_fp32` returns `mask_logits` as `[num_queries, h, w]` (ndim 3) at canvas
+     resolution; the reference accepts ndim 3, the port initially rejected it.
+  5. With two final-output stages, non-streaming `serving_chat.py` emits one choice per final output type,
+     so the text choice content is a plain `str` and the masks sit in a separate choice — the assertion
+     helper collects parts across all choices, and stage 0 declares `final_output_type="text"`.
+- A single-mask payload carries no `mask_index` (`stacked and image_data.shape[0] > 1` in
+  `_create_image_choice`); the helper allows exactly that case, and
+  `tests/entrypoints/openai_api/test_serving_chat_mask_choices.py` asserts the behaviour.
+- `ruff` must not run on `.sh` files — it parses them as Python and reports invalid syntax. Shell files are
+  gated by `shellcheck`; shellcheck is unavailable on this host, so `bash -n` is the local substitute.
+- Container facts: each `docker run --rm` is fresh, so `pip install` must be chained with the gate in the
+  same command; `python` is not on PATH (use `python3`); `git` exists on the host but not in the image;
+  `.ruff_cache` is root-owned, so run `uvx ruff@0.14.10 ... --no-cache`.
+- Debugging lesson: piping docker output through `tail -N` truncates the failure lines and produces false
+  conclusions. Redirect to a log file under `/workspace` and grep it for the short test summary plus
+  `AssertionError|ValueError|RuntimeError|FAILED|passed|failed`.

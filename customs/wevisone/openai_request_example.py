@@ -52,12 +52,12 @@ Box order matches mask order, so a client pairs them by enumerating both.
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import pybase64 as base64
 import requests
 
 from vllm_omni.model_executor.models.wevisone.constants import (
@@ -69,7 +69,9 @@ from vllm_omni.model_executor.models.wevisone.constants import (
 
 DEFAULT_MODEL = "tencent/WeVisOne-VL-4B"
 DEFAULT_URL = "http://localhost:8091/v1/chat/completions"
-DEFAULT_IMAGE = Path(__file__).resolve().parents[2] / "extra_repos" / "WeVisOne-VL" / "assets" / "demo" / "seabreeze.jpg"
+DEFAULT_IMAGE = (
+    Path(__file__).resolve().parents[2] / "extra_repos" / "WeVisOne-VL" / "assets" / "demo" / "seabreeze.jpg"
+)
 
 
 @dataclass
@@ -155,9 +157,7 @@ def write_result(out_dir: Path, spec: RequestSpec, text: str, masks: list[dict[s
         "boxes": boxes,
         # Mask i is the answer to box i, so the mapping is positional; writing
         # it out keeps the pairing explicit for whatever reads the result.
-        "mask_to_box": [
-            {"mask_index": index, "box": boxes[index]} for index in range(min(len(masks), len(boxes)))
-        ],
+        "mask_to_box": [{"mask_index": index, "box": boxes[index]} for index in range(min(len(masks), len(boxes)))],
         "mask_files": mask_files,
         "image": str(spec.image),
     }

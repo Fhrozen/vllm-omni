@@ -16,12 +16,12 @@ fire, so the capture must happen inside the compiled forward.
 
 from __future__ import annotations
 
-from typing import Dict, List, Sequence, Tuple
+from collections.abc import Sequence
 
 import torch
 
 
-def premerge_grid_hw(image_grid_thw: torch.Tensor) -> List[Tuple[int, int]]:
+def premerge_grid_hw(image_grid_thw: torch.Tensor) -> list[tuple[int, int]]:
     """Per-image patch grid before Qwen's spatial merger."""
     grids = []
     for t, h, w in image_grid_thw.tolist():
@@ -31,14 +31,24 @@ def premerge_grid_hw(image_grid_thw: torch.Tensor) -> List[Tuple[int, int]]:
     return grids
 
 
-def split_concat_tokens(tokens: torch.Tensor, counts: Sequence[int]) -> List[torch.Tensor]:
+def as_token_rows(tokens: torch.Tensor) -> torch.Tensor:
+    """Return a merger input as ``[N, C]`` patch rows.
+
+    vLLM's vision blocks hand the mergers the attention-layout tensor ``[N, 1, C]``,
+    while the reference implementation sees ``[N, C]``. The patch order is the same,
+    so only the singleton sequence dim is folded away.
+    """
+    if tokens.dim() == 3:
+        return tokens.reshape(-1, int(tokens.shape[-1]))
+    return tokens
+
+
+def split_concat_tokens(tokens: torch.Tensor, counts: Sequence[int]) -> list[torch.Tensor]:
     """Split a concatenated [sum N_i, C] tensor into per-image [N_i, C]."""
     if tokens is None:
         return []
     if sum(counts) != tokens.shape[0]:
-        raise ValueError(
-            f"token count mismatch: sum(counts)={sum(counts)} vs tokens={tokens.shape[0]}"
-        )
+        raise ValueError(f"token count mismatch: sum(counts)={sum(counts)} vs tokens={tokens.shape[0]}")
     return list(torch.split(tokens, list(counts), dim=0))
 
 
@@ -54,10 +64,7 @@ def assert_cnn_rgb(
     if image.dim() == 3:
         image = image.unsqueeze(0)
     if image.dim() != 4 or image.shape[1] != 3:
-        raise ValueError(
-            f"sample {sample_idx}: decoder image must be [1,3,H,W] or [3,H,W], "
-            f"got {tuple(image.shape)}"
-        )
+        raise ValueError(f"sample {sample_idx}: decoder image must be [1,3,H,W] or [3,H,W], got {tuple(image.shape)}")
     got = (int(image.shape[-2]), int(image.shape[-1]))
     expect = (int(cnn_image_size), int(cnn_image_size))
     if got != expect:
@@ -71,33 +78,35 @@ def assert_cnn_rgb(
 
 def premerge_tokens_to_2d(
     feature_tokens: torch.Tensor,
-    grid_hw: Tuple[int, int],
+    grid_hw: tuple[int, int],
     spatial_merge_size: int,
 ) -> torch.Tensor:
-    """Undo Qwen's merge-local patch shuffle and return ``[1,C,H,W]``.
+    """Undo Qwen's merge-local patch shuffle and return one ``[C,H,W]`` map.
 
     The processor flattens patches in ``[H/m,W/m,m,m]`` order.  A direct
     ``reshape(H,W)`` silently scrambles every ``m x m`` neighbourhood.
+
+    No batch dim is added here: a captured map belongs to one image, and the
+    cross-stage payload stacks the layers of that image into ``[layers,C,H,W]``.
+    The decoder re-adds its batch dim when it calls the reference-style decoder.
     """
     h, w = (int(grid_hw[0]), int(grid_hw[1]))
     m = int(spatial_merge_size)
     if h % m or w % m:
         raise ValueError(f"pre-merge grid {(h, w)} is not divisible by merge size {m}")
     if feature_tokens.dim() != 2 or int(feature_tokens.shape[0]) != h * w:
-        raise ValueError(
-            f"pre-merge tokens {tuple(feature_tokens.shape)} do not match grid {h}x{w}"
-        )
+        raise ValueError(f"pre-merge tokens {tuple(feature_tokens.shape)} do not match grid {h}x{w}")
     c = int(feature_tokens.shape[-1])
     x = feature_tokens.reshape(h // m, w // m, m, m, c)
     x = x.permute(0, 2, 1, 3, 4).contiguous().reshape(h, w, c)
-    return x.permute(2, 0, 1).unsqueeze(0)
+    return x.permute(2, 0, 1).contiguous()
 
 
 def extract_t_seg(
     last_hidden_state: torch.Tensor,
     input_ids: torch.Tensor,
     seg_token_id: int,
-) -> List[torch.Tensor]:
+) -> list[torch.Tensor]:
     """Per-sample LM hidden states at ``<OBJ>`` positions."""
     result = []
     for b in range(input_ids.shape[0]):
@@ -119,7 +128,7 @@ class VisualFeatureCapture:
         def hook(_module, inputs):
             if not inputs:
                 raise RuntimeError(f"empty merger input for ViT layer {layer_idx}")
-            self.premerge_features[int(layer_idx)] = inputs[0]
+            self.premerge_features[int(layer_idx)] = as_token_rows(inputs[0])
 
         return hook
 
@@ -133,20 +142,13 @@ class VisualFeatureCapture:
         missing = [x for x in self.feature_layers if x not in available]
         if missing:
             raise RuntimeError(
-                f"cannot capture pre-merge ViT layers {missing}; merger inputs exist at "
-                f"{sorted(available)}"
+                f"cannot capture pre-merge ViT layers {missing}; merger inputs exist at {sorted(available)}"
             )
         for idx, merger in zip(deep_indexes, mergers):
             if idx in self.feature_layers:
-                self._handles.append(
-                    merger.register_forward_pre_hook(self._capture_premerge(idx))
-                )
+                self._handles.append(merger.register_forward_pre_hook(self._capture_premerge(idx)))
         if final_idx in self.feature_layers:
-            self._handles.append(
-                visual.merger.register_forward_pre_hook(
-                    self._capture_premerge(final_idx)
-                )
-            )
+            self._handles.append(visual.merger.register_forward_pre_hook(self._capture_premerge(final_idx)))
         return self
 
     def __exit__(self, exc_type, exc, tb):
@@ -165,12 +167,16 @@ class VisualFeatureCapture:
 
 
 def per_sample_premerge_feature_maps(
-    premerge_features: Dict[int, torch.Tensor],
+    premerge_features: dict[int, torch.Tensor],
     feature_layers: Sequence[int],
     image_grid_thw: torch.Tensor,
     spatial_merge_size: int,
-) -> List[List[torch.Tensor]]:
-    """Split concatenated raw ViT tokens and restore row-major feature maps."""
+) -> list[torch.Tensor]:
+    """Split concatenated raw ViT tokens into one ``[layers,C,H,W]`` tensor per image.
+
+    Cross-stage payloads carry a single tensor per request, so the captured
+    layers are stacked here; the decoder reads them back as that shape.
+    """
     grids = premerge_grid_hw(image_grid_thw)
     counts = [h * w for h, w in grids]
     ordered = []
@@ -180,12 +186,7 @@ def per_sample_premerge_feature_maps(
             raise RuntimeError(f"ViT layer {idx} was not captured before its merger")
         ordered.append(split_concat_tokens(feat, counts))
 
-    per_sample: List[List[torch.Tensor]] = []
-    for sample_idx, grid in enumerate(grids):
-        per_sample.append(
-            [
-                premerge_tokens_to_2d(level[sample_idx], grid, spatial_merge_size)
-                for level in ordered
-            ]
-        )
-    return per_sample
+    return [
+        torch.stack([premerge_tokens_to_2d(level[sample_idx], grid, spatial_merge_size) for level in ordered], dim=0)
+        for sample_idx, grid in enumerate(grids)
+    ]

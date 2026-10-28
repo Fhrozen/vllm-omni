@@ -10,5 +10,5 @@ SCRIPT_DIR=$(realpath "$(dirname "${BASH_SOURCE[0]}")")
 WORKDIR=$(realpath "${SCRIPT_DIR}/../..")
 
 cd "$WORKDIR"
-customs/qwen_drive/docker_run.sh \
+"${SCRIPT_DIR}/docker_run.sh" \
     "python customs/wevisone/ref_golden.py --decode-masks $*"

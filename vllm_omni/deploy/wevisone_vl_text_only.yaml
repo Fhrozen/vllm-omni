@@ -8,6 +8,7 @@
 #
 # Use the two-stage wevisone_vl.yaml for segmentation, matting and visual_prompt.
 
+pipeline: wevisone_vl_text_only
 async_chunk: false
 trust_remote_code: true
 dtype: bfloat16

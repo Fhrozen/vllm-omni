@@ -17,6 +17,7 @@ from vllm_omni.model_extras.registry import (
     get_x_to_text_model_family,
     should_init_extra_args_for_non_diffusion_stages,
     should_preserve_reference_image_size,
+    treats_chat_images_as_model_input,
 )
 
 __all__ = [
@@ -35,4 +36,5 @@ __all__ = [
     "get_x_to_text_model_family",
     "should_init_extra_args_for_non_diffusion_stages",
     "should_preserve_reference_image_size",
+    "treats_chat_images_as_model_input",
 ]

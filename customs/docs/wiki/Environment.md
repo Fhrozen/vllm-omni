@@ -1,13 +1,29 @@
 # Environment
 
-## Hardware (host nelson-lab03)
-- 2x NVIDIA GeForce RTX 5060 Ti, 16311 MiB each, compute capability 12.0 (Blackwell, sm_120).
-- Implications: VLM bf16 weights = 8.5 GB (`model.safetensors`), each planner = 2.0 GB. Tight memory; keep `max_model_len` small and `gpu_memory_utilization` ~0.85.
+## Hardware (host nelson-lab02)
+- 2x NVIDIA GeForce RTX 3060, 12288 MiB each, compute capability 8.6 (Ampere, sm_86), driver 580.95.05.
+  Verified with `nvidia-smi --query-gpu=name,memory.total,driver_version,compute_cap --format=csv`.
+- Implications: a 4B bf16 VLM is ~9.2 GB of weights, so one stage fits per card with
+  `gpu_memory_utilization` ~0.85-0.90 and a small `max_model_len`; keep `max_num_seqs` at 1 for the
+  tightest memory budget. `RTX3060` is registered as a CUDA SKU marker in `pyproject.toml`, but
+  `.buildkite/common/ci_mirror_hardwares.yml` has no consumer-GPU pool, so `RTX3060` tests are
+  local-only and CI still selects them under the H100/B200 markers.
+- Earlier measurements (qwen_drive, ideogram) were taken on host nelson-lab03 with 2x RTX 5060 Ti
+  16 GB (sm_120); the pass criteria quoted for those models in [Testing](Testing.md) come from that
+  machine and have not been re-measured here.
 
 ## Docker
 - Image: `fhrozen/vllm-omni:builder-cuda13-u24` (from `docker/Dockerfile.dev`; uv, HF_HOME=/workspace/.hf_cache, UV_CACHE_DIR=/workspace/.uv_cache).
 - Repo mounted at `/workspace`; venv at `/workspace/.venv` (python lives in `/workspace/.uv-bin`, only valid inside docker).
 - Do not use the host `.venv/bin/python`.
+- Fallback when the builder image cannot be pulled (Docker Hub 401, as on the current host): the local
+  `vllm/vllm-openai:latest` works with the shared `.venv` through the mount. It has
+  `ENTRYPOINT ["vllm","serve"]`, so `--entrypoint bash` is required — that is what
+  `customs/wevisone/docker_run.sh` does. In that image `pip install -e ".[dev]"` fails and
+  `pyproject.toml[dev]` does not install the dev extras, so the pytest plugins
+  (`pytest-asyncio`, `pytest-cov`, `pytest-mock`, `pytest-shard`, `pytest-xdist`, `pytest-subtests`)
+  and `aenum`/`omegaconf` have to be installed individually; `python` is absent, use `python3`, and set
+  `PYTHONPATH=/workspace`.
 
 ## Scripts (`customs/qwen_drive/`)
 - `docker_run.sh "<cmd>"`: run a command in docker with the venv active. Env: `QD_GPUS` (default `all`), `QD_IMAGE`, `QD_EXTRA_DOCKER_ARGS`.

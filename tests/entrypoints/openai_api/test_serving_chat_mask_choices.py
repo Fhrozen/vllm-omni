@@ -53,14 +53,16 @@ def _decoded_png(part):
 
 
 def test_stacked_masks_become_one_png_per_leading_slice():
+    # One [1, H, W] mask per leading slice, as the pixel-decoder stage emits them.
     masks = torch.tensor(
         [
-            [[[0.0, 1.0]], [[0.2, 0.0]]],
-            [[[0.4, 0.4]], [[0.6, 1.0]]],
-            [[[1.0, 0.0]], [[0.0, 0.0]]],
+            [[[0.0, 1.0], [0.2, 0.0]]],
+            [[[0.4, 0.4], [0.6, 1.0]]],
+            [[[1.0, 0.0], [0.0, 0.0]]],
         ],
         dtype=torch.float32,
     )
+    assert masks.shape == (3, 1, 2, 2)
 
     content = _image_choice(masks)
 
@@ -123,7 +125,9 @@ def test_zero_numel_slots_are_skipped_without_inventing_masks():
 
 def test_stage_metrics_are_carried_on_every_mask_part():
     stage_durations = {"stage_0": 1.2, "stage_1": 0.3}
-    content = _image_choice(torch.zeros((2, 1, 2, 2), dtype=torch.float32), stage_durations, 12.5)
+    content = _image_choice(
+        torch.zeros((2, 1, 2, 2), dtype=torch.float32), stage_durations=stage_durations, peak_memory_mb=12.5
+    )
     assert all(part["stage_durations"] == stage_durations for part in content)
     assert all(part["peak_memory_mb"] == 12.5 for part in content)
 

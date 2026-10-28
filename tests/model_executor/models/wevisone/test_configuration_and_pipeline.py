@@ -70,7 +70,9 @@ def test_mask_pipeline_shape() -> None:
     # Plain "text" would drop the feature payload, so the compound type is the
     # handoff contract.
     assert vlm.engine_output_type == "text+segmentation"
-    assert not vlm.final_output
+    # Both stages are final outputs: stage 0 carries the box text, stage 1 the
+    # masks. Mask i answers box i, so the client needs both halves.
+    assert vlm.final_output and vlm.final_output_type == "text"
     assert vlm.custom_process_next_stage_input_func.endswith("vlm2pixel_decoder_full_payload")
 
     constraints = vlm.sampling_constraints
@@ -134,3 +136,13 @@ def test_deploy_yaml_keeps_the_handoff_contract() -> None:
     text_only = _deploy_yaml("wevisone_vl_text_only.yaml")
     assert len(text_only["stages"]) == 1
     assert text_only["stages"][0]["default_sampling_params"]["skip_special_tokens"] is False
+
+
+def test_deploy_yaml_pins_the_architectures_the_processor_needs() -> None:
+    # vLLM resolves the multimodal processor from hf_config.architectures, not
+    # from the stage's model_arch, so this pin is what makes the WeVisOne
+    # processor run and the pixel canvas reach stage 1.
+    overrides = _deploy_yaml("wevisone_vl.yaml")["stages"][0]["hf_overrides"]
+    assert overrides == {"architectures": ["WeVisOneVLForConditionalGeneration"]}
+    # model_type has to stay qwen3_vl for the backbone's own config checks.
+    assert "model_type" not in overrides

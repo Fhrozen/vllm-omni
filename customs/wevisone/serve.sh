@@ -14,5 +14,5 @@ SCRIPT_DIR=$(realpath "$(dirname "${BASH_SOURCE[0]}")")
 DEPLOY=${1:-/workspace/vllm_omni/deploy/wevisone_vl.yaml}
 MODEL=${WVS_MODEL:-/workspace/extra_repos/WeVisOne-VL-4B}
 
-"${SCRIPT_DIR}/../qwen_drive/docker_run.sh" "vllm serve ${MODEL} --omni --deploy-config ${DEPLOY} \
+"${SCRIPT_DIR}/docker_run.sh" "vllm serve ${MODEL} --omni --deploy-config ${DEPLOY} \
     --port 8091 --stage-init-timeout 900"

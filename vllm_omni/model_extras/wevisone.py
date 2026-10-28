@@ -40,6 +40,13 @@ WEVISONE_EXTRA_BODY_PARAMS: frozenset[str] = frozenset(
 
 WEVISONE_EXTRA_OUTPUT_PARAMS: frozenset[str] = frozenset()
 
+# An image in a chat message is WeVisOne's *model input*: stage 0 reads it
+# through its own multimodal processor and the instruction is the message
+# content. Image-serving defaults treat a chat image as a generation reference
+# (``img2img``), a modality WeVisOne's processor has no parser for, so this
+# declaration keeps mask requests on the chat path.
+WEVISONE_CHAT_IMAGE_IS_MODEL_INPUT = True
+
 
 def build_x_to_text_prompt(model: str, prompt: str, has_image: bool) -> tuple[dict[str, Any], list[int] | None]:
     """Build the x_to_text prompt for WeVisOne-VL.

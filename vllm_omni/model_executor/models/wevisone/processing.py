@@ -18,15 +18,19 @@ input processor rather than consumed by the vision tower; ``Qwen3VLForConditiona
 Generation._parse_and_validate_multimodal_inputs`` ignores unknown kwargs.
 """
 
+from collections.abc import Mapping
+
 import numpy as np
 import torch
 from PIL import Image
 from transformers import BatchFeature
-
+from vllm.logger import init_logger
 from vllm.model_executor.models.qwen3_vl import Qwen3VLMultiModalProcessor
 from vllm.multimodal.inputs import MultiModalFieldConfig
 
 from .config import Qwen3VLSegConfig
+
+logger = init_logger(__name__)
 
 CANVAS_KEY = "wevisone_canvas"
 HW_KEY = "wevisone_hw"
@@ -63,33 +67,33 @@ class WeVisOneMultiModalProcessor(Qwen3VLMultiModalProcessor):
     original resolution.
     """
 
-    def _call_hf_processor(
+    def _postprocess_hf_mm_data(
         self,
-        prompt: str,
-        mm_data: dict,
-        mm_kwargs: dict,
-        tok_kwargs: dict,
+        mm_inputs: Mapping[str, object],
+        hf_processor_mm_kwargs: Mapping[str, object],
+        processed_data: BatchFeature,
     ) -> BatchFeature:
-        hf_inputs = super()._call_hf_processor(prompt, mm_data, mm_kwargs, tok_kwargs)
+        """Add the canvas fields to whatever the HF processor produced.
 
-        images = mm_data.get("images") or []
+        ``Qwen3VLMultiModalProcessor`` overrides ``_apply_hf_processor_main`` and
+        calls the HF processor directly rather than through ``_call_hf_processor``,
+        so overriding the latter never fires on that path. ``_postprocess_hf_mm_data``
+        is the one hook both the base and the Qwen3-VL paths run through, so the
+        canvas is attached there.
+
+        vLLM assembles the inputs as ``{f"{modality}s": items}`` (parse.py), so the
+        pictures arrive under ``images``; the singular modality name is accepted for
+        callers that pass it directly.
+        """
+        images = mm_inputs.get("images") or mm_inputs.get("image") or []
         if not images:
-            return hf_inputs
+            return processed_data
 
-        canvases: list[torch.Tensor] = []
-        heights: list[int] = []
-        widths: list[int] = []
-        for item in images:
-            image = _as_pil_image(item)
-            canvases.append(build_canvas(image, self.canvas_size()))
-            heights.append(image.height)
-            widths.append(image.width)
-
-        hf_inputs[CANVAS_KEY] = torch.stack(canvases)
-        hf_inputs[HW_KEY] = torch.tensor(
-            list(zip(heights, widths, strict=True)), dtype=torch.int64
-        )
-        return hf_inputs
+        size = self.canvas_size()
+        pil_images = [_as_pil_image(item) for item in images]
+        processed_data[CANVAS_KEY] = torch.stack([build_canvas(image, size) for image in pil_images])
+        processed_data[HW_KEY] = torch.tensor([(image.height, image.width) for image in pil_images], dtype=torch.int64)
+        return processed_data
 
     def canvas_size(self) -> int:
         """Canvas side for this model, honouring an overridden seg config."""

@@ -24,6 +24,7 @@ from typing import Any
 
 from vllm_omni.lora.request import LoRARequest
 from vllm_omni.lora.utils import stable_lora_int_id
+from vllm_omni.model_extras import treats_chat_images_as_model_input
 
 
 def get_stage_type(stage_cfg: Any) -> str:
@@ -64,6 +65,40 @@ def is_image_generation_stage(stage_cfg: Any) -> bool:
         final_output = getattr(stage_cfg, "final_output", False)
         final_output_type = getattr(stage_cfg, "final_output_type", None)
     return bool(final_output) and final_output_type in {"image", "images"}
+
+
+def _read_config_field(config: Any, key: str) -> Any:
+    """Read one field from either shape of a config object."""
+    if isinstance(config, dict):
+        return config.get(key)
+    if hasattr(config, "get"):
+        try:
+            return config.get(key)
+        except Exception:
+            pass
+    return getattr(config, key, None)
+
+
+def get_stage_model_arch(stage_cfg: Any) -> str | None:
+    """Return a stage's model architecture across the shapes serving receives.
+
+    Typed stage configs carry the architecture on ``model_config``; the legacy
+    dict-shaped configs carry it on ``engine_args`` or on the stage itself. A
+    resolver that reads only one of them reports ``None`` for a pipeline whose
+    image-output stage is a generation LLM instead of a diffusion model.
+    """
+    for holder in (
+        _read_config_field(stage_cfg, "model_config"),
+        stage_cfg,
+        _read_config_field(stage_cfg, "engine_args"),
+    ):
+        if holder is None:
+            continue
+        for key in ("model_class_name", "model_arch"):
+            value = _read_config_field(holder, key)
+            if value:
+                return str(value)
+    return None
 
 
 def is_video_generation_pipeline(stage_configs: list[Any] | None) -> bool:
@@ -141,3 +176,19 @@ def is_single_stage_diffusion(engine_client: Any) -> bool:
     if len(stage_configs) != 1:
         return False
     return getattr(stage_configs[0], "stage_type", None) in ("diffusion", "DIFFUSION")
+
+
+def uses_generation_prompt_path(modalities: list[str] | None, model_class_name: str | None) -> bool:
+    """Return whether a chat request should be rewritten into a generation prompt.
+
+    Image-generation pipelines want their AR stage to receive a clean text prompt
+    plus an optional conditioning image, so the chat-template output is replaced
+    by a diffusion-style prompt and the chat image becomes an ``img2img``
+    reference. Models that read the chat image as their own multimodal input
+    instead declare ``chat_image_is_model_input``; for them the chat path must
+    stay in force, because their prompt template and processor are what see the
+    image, and their processors have no ``img2img`` parser.
+    """
+    if not modalities or "image" not in modalities:
+        return False
+    return not treats_chat_images_as_model_input(model_class_name)

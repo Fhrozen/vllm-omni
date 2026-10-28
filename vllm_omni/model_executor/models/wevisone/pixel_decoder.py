@@ -40,7 +40,7 @@ from vllm.logger import init_logger
 
 from vllm_omni.model_executor.models.output_templates import OmniOutput
 
-from .config import ARCHITECTURE_VERSION, Qwen3VLSegConfig
+from .config import Qwen3VLSegConfig
 from .constants import SEG_TOKEN_ID_FALLBACK
 from .decoder import build_mask_decoder
 from .feature_bridge import assert_cnn_rgb
@@ -67,13 +67,12 @@ def _resolve_sidecar(model_path: str, revision: str | None, download_dir: str | 
     if os.path.isdir(model_path):
         if not os.path.isfile(local):
             raise FileNotFoundError(
-                f"WeVisOne masks need {SIDECAR_FILENAME}; it is not in {model_path}. "
-                "Text-only tasks do not need it."
+                f"WeVisOne masks need {SIDECAR_FILENAME}; it is not in {model_path}. Text-only tasks do not need it."
             )
         return local
-    from huggingface_hub import hf_hub_download
+    from vllm_omni.transformers_utils.repo_utils import hf_api
 
-    return hf_hub_download(
+    return hf_api().hf_hub_download(
         repo_id=model_path,
         filename=SIDECAR_FILENAME,
         revision=revision,
@@ -91,9 +90,7 @@ def _segmentation_view(info: Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(nested, Mapping):
         return dict(nested)
     flat = {
-        key.split(".", 1)[1]: value
-        for key, value in info.items()
-        if key.startswith("segmentation.") and "." in key
+        key.split(".", 1)[1]: value for key, value in info.items() if key.startswith("segmentation.") and "." in key
     }
     return flat
 
@@ -112,12 +109,15 @@ def _hw_pair(value: Tensor) -> tuple[int, int]:
 def _masks_from_logits(logits: Tensor, height: int, width: int) -> Tensor:
     """Sigmoid and bilinear-resize mask logits back to the original size.
 
-    Shapes follow the reference exactly: ``[num_masks, 1, h, w]`` or
-    ``[h, w]`` are the only accepted layouts. Returns ``[num_masks, 1, H, W]``
-    float32 in ``[0, 1]``, which is what a client receives as one PNG per mask.
+    Shapes follow the reference exactly: ``[num_masks, h, w]`` (what the decoder
+    returns), ``[num_masks, 1, h, w]`` and ``[h, w]`` are the accepted layouts.
+    Returns ``[num_masks, 1, H, W]`` float32 in ``[0, 1]``, which is what a client
+    receives as one PNG per mask.
     """
     if logits.ndim == 4 and logits.shape[1] == 1:
         rows = logits[:, 0]
+    elif logits.ndim == 3:
+        rows = logits
     elif logits.ndim == 2:
         rows = logits[None]
     else:
@@ -279,8 +279,7 @@ class WeVisOnePixelDecoder(nn.Module):
         mask_hw = seg.get("mask_hw")
         if not isinstance(features, Tensor) or features.numel() == 0:
             raise ValueError(
-                "a request with <OBJ> queries carries no pre-merger feature maps, "
-                "so its masks cannot be decoded"
+                "a request with <OBJ> queries carries no pre-merger feature maps, so its masks cannot be decoded"
             )
         if features.ndim != 4:
             raise ValueError(f"feature payload must be [layers, C, H, W], got {tuple(features.shape)}")
@@ -298,14 +297,17 @@ class WeVisOnePixelDecoder(nn.Module):
         if height <= 0 or width <= 0:
             raise ValueError(f"mask payload must carry a positive (H, W), got {(height, width)}")
 
+        # The canvas and feature maps are registered with ``keep_on_cpu=True`` so the
+        # cross-stage payload stays serialisable; the decoder weights live on the
+        # stage device, so every tensor is moved before the forward call.
         device = self.vllm_config.device_config.device
-        visual_features_2d = [feature.unsqueeze(0) for feature in features]
+        visual_features_2d = [feature.unsqueeze(0).to(device) for feature in features]
         grid = _hw_pair(grid_hw)
         outputs = self.decoder(
-            assert_cnn_rgb(canvas, self.seg_config.cnn_image_size),
+            assert_cnn_rgb(canvas.to(device), self.seg_config.cnn_image_size),
             visual_features_2d,
-            t_seg,
-            boxes,
+            t_seg.to(device),
+            boxes.to(device),
             grid,
         )
         masks = _masks_from_logits(outputs["mask_logits"], height, width)

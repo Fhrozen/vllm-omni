@@ -8,7 +8,6 @@ Ported from the Tencent WeVisOne-VL reference implementation (Apache-2.0).
 from __future__ import annotations
 
 import math
-from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -30,13 +29,9 @@ def multi_scale_deformable_attn_pytorch(
     sampled_per_level = []
     for level, (height, width) in enumerate(spatial_shapes.tolist()):
         value_l = value_levels[level]
-        value_l = value_l.permute(0, 2, 3, 1).reshape(
-            b * num_heads, head_dim, int(height), int(width)
-        )
+        value_l = value_l.permute(0, 2, 3, 1).reshape(b * num_heads, head_dim, int(height), int(width))
         grid_l = sampling_grids[:, :, :, level]
-        grid_l = grid_l.permute(0, 2, 1, 3, 4).reshape(
-            b * num_heads, num_queries, num_points, 2
-        )
+        grid_l = grid_l.permute(0, 2, 1, 3, 4).reshape(b * num_heads, num_queries, num_points, 2)
         sampled = F.grid_sample(
             value_l.float(),
             grid_l.float(),
@@ -71,12 +66,8 @@ class MultiScaleDeformableAttention(nn.Module):
         self.num_levels = int(num_levels)
         self.num_heads = int(num_heads)
         self.num_points = int(num_points)
-        self.sampling_offsets = nn.Linear(
-            embed_dim, num_heads * num_levels * num_points * 2
-        )
-        self.attention_weights = nn.Linear(
-            embed_dim, num_heads * num_levels * num_points
-        )
+        self.sampling_offsets = nn.Linear(embed_dim, num_heads * num_levels * num_points * 2)
+        self.attention_weights = nn.Linear(embed_dim, num_heads * num_levels * num_points)
         self.value_proj = nn.Linear(embed_dim, embed_dim)
         self.output_proj = nn.Linear(embed_dim, embed_dim)
         self.reset_parameters()
@@ -87,9 +78,7 @@ class MultiScaleDeformableAttention(nn.Module):
         theta = theta * (2.0 * math.pi / self.num_heads)
         grid = torch.stack([theta.cos(), theta.sin()], dim=-1)
         grid = grid / grid.abs().amax(dim=-1, keepdim=True)
-        grid = grid.view(self.num_heads, 1, 1, 2).repeat(
-            1, self.num_levels, self.num_points, 1
-        )
+        grid = grid.view(self.num_heads, 1, 1, 2).repeat(1, self.num_levels, self.num_points, 1)
         for point in range(self.num_points):
             grid[:, :, point] *= point + 1
         with torch.no_grad():
@@ -108,7 +97,7 @@ class MultiScaleDeformableAttention(nn.Module):
         input_flatten: torch.Tensor,
         spatial_shapes: torch.Tensor,
         level_start_index: torch.Tensor,
-        input_padding_mask: Optional[torch.Tensor] = None,
+        input_padding_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         b, num_queries, _ = query.shape
         b_value, input_len, _ = input_flatten.shape
@@ -120,9 +109,7 @@ class MultiScaleDeformableAttention(nn.Module):
         value = self.value_proj(input_flatten)
         if input_padding_mask is not None:
             value = value.masked_fill(input_padding_mask[..., None], 0.0)
-        value = value.view(
-            b, input_len, self.num_heads, self.embed_dim // self.num_heads
-        )
+        value = value.view(b, input_len, self.num_heads, self.embed_dim // self.num_heads)
         offsets = self.sampling_offsets(query).view(
             b,
             num_queries,
@@ -131,32 +118,19 @@ class MultiScaleDeformableAttention(nn.Module):
             self.num_points,
             2,
         )
-        weights = self.attention_weights(query).view(
-            b, num_queries, self.num_heads, self.num_levels * self.num_points
-        )
-        weights = weights.softmax(-1).view(
-            b, num_queries, self.num_heads, self.num_levels, self.num_points
-        )
+        weights = self.attention_weights(query).view(b, num_queries, self.num_heads, self.num_levels * self.num_points)
+        weights = weights.softmax(-1).view(b, num_queries, self.num_heads, self.num_levels, self.num_points)
         if reference_points.shape[-1] == 2:
-            normalizer = torch.stack(
-                [spatial_shapes[:, 1], spatial_shapes[:, 0]], dim=-1
-            ).to(device=query.device, dtype=query.dtype)
-            locations = (
-                reference_points[:, :, None, :, None]
-                + offsets / normalizer[None, None, None, :, None]
+            normalizer = torch.stack([spatial_shapes[:, 1], spatial_shapes[:, 0]], dim=-1).to(
+                device=query.device, dtype=query.dtype
             )
+            locations = reference_points[:, :, None, :, None] + offsets / normalizer[None, None, None, :, None]
         elif reference_points.shape[-1] == 4:
             locations = (
                 reference_points[:, :, None, :, None, :2]
-                + offsets
-                / float(self.num_points)
-                * reference_points[:, :, None, :, None, 2:]
-                * 0.5
+                + offsets / float(self.num_points) * reference_points[:, :, None, :, None, 2:] * 0.5
             )
         else:
             raise ValueError("reference_points last dimension must be 2 or 4")
-        output = multi_scale_deformable_attn_pytorch(
-            value, spatial_shapes, locations, weights
-        )
+        output = multi_scale_deformable_attn_pytorch(value, spatial_shapes, locations, weights)
         return self.output_proj(output.to(dtype=query.dtype))
-

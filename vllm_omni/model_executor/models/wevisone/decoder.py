@@ -9,7 +9,7 @@ Module names and shapes are fixed by ``mask_decoder.pt`` and must not drift.
 from __future__ import annotations
 
 import math
-from typing import Dict, List, Optional, Sequence, Tuple
+from collections.abc import Sequence
 
 import torch
 import torch.nn as nn
@@ -96,7 +96,7 @@ class MaskQueryBuilder(nn.Module):
         self,
         t_seg: torch.Tensor,
         boxes_xyxy: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         content = self.content_norm(self.content_proj(t_seg))
         position = self.position_norm(self.box_position(boxes_xyxy))
         return content, position
@@ -120,27 +120,17 @@ class PositionEmbeddingSine2D(nn.Module):
         y = y / max(float(h), 1.0) * (2.0 * math.pi)
         x = x / max(float(w), 1.0) * (2.0 * math.pi)
         yy, xx = torch.meshgrid(y, x, indexing="ij")
-        dim_t = torch.arange(
-            self.num_pos_feats, device=feature.device, dtype=torch.float32
-        )
-        dim_t = self.temperature ** (
-            2.0 * torch.div(dim_t, 2, rounding_mode="floor") / self.num_pos_feats
-        )
+        dim_t = torch.arange(self.num_pos_feats, device=feature.device, dtype=torch.float32)
+        dim_t = self.temperature ** (2.0 * torch.div(dim_t, 2, rounding_mode="floor") / self.num_pos_feats)
         pos_x = xx[..., None] / dim_t
         pos_y = yy[..., None] / dim_t
-        pos_x = torch.stack(
-            [pos_x[..., 0::2].sin(), pos_x[..., 1::2].cos()], dim=-1
-        ).flatten(-2)
-        pos_y = torch.stack(
-            [pos_y[..., 0::2].sin(), pos_y[..., 1::2].cos()], dim=-1
-        ).flatten(-2)
+        pos_x = torch.stack([pos_x[..., 0::2].sin(), pos_x[..., 1::2].cos()], dim=-1).flatten(-2)
+        pos_y = torch.stack([pos_y[..., 0::2].sin(), pos_y[..., 1::2].cos()], dim=-1).flatten(-2)
         pos = torch.cat([pos_y, pos_x], dim=-1)
         return pos.permute(2, 0, 1).unsqueeze(0).expand(b, -1, -1, -1).to(dtype)
 
 
-def _spatial_metadata(
-    features: Sequence[torch.Tensor], device: torch.device
-) -> Tuple[torch.Tensor, torch.Tensor]:
+def _spatial_metadata(features: Sequence[torch.Tensor], device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
     shapes = torch.tensor(
         [[int(x.shape[-2]), int(x.shape[-1])] for x in features],
         device=device,
@@ -187,12 +177,8 @@ class SpatialConvEncoderLayer(nn.Module):
     ) -> torch.Tensor:
         sizes = [int(h) * int(w) for h, w in spatial_shapes.tolist()]
         mixed = []
-        for tokens, (height, width) in zip(
-            (src + pos).split(sizes, dim=1), spatial_shapes.tolist()
-        ):
-            feature = tokens.transpose(1, 2).reshape(
-                tokens.shape[0], tokens.shape[-1], int(height), int(width)
-            )
+        for tokens, (height, width) in zip((src + pos).split(sizes, dim=1), spatial_shapes.tolist()):
+            feature = tokens.transpose(1, 2).reshape(tokens.shape[0], tokens.shape[-1], int(height), int(width))
             feature = self.pointwise(F.gelu(self.depthwise(feature)))
             mixed.append(feature.flatten(2).transpose(1, 2))
         src = self.norm1(src + self.dropout(torch.cat(mixed, dim=1)))
@@ -203,9 +189,7 @@ class SpatialConvEncoderLayer(nn.Module):
 class DINOEncoder(nn.Module):
     def __init__(self, cfg: Qwen3VLSegConfig):
         super().__init__()
-        self.layers = nn.ModuleList(
-            [SpatialConvEncoderLayer(cfg) for _ in range(cfg.msda_encoder_layers)]
-        )
+        self.layers = nn.ModuleList([SpatialConvEncoderLayer(cfg) for _ in range(cfg.msda_encoder_layers)])
 
     def forward(
         self,
@@ -271,9 +255,7 @@ class DINOMaskDecoder(nn.Module):
     def __init__(self, cfg: Qwen3VLSegConfig):
         super().__init__()
         self.num_levels = cfg.msda_num_levels
-        self.layers = nn.ModuleList(
-            [DINODecoderLayer(cfg) for _ in range(cfg.transformer_layers)]
-        )
+        self.layers = nn.ModuleList([DINODecoderLayer(cfg) for _ in range(cfg.transformer_layers)])
 
     def forward(
         self,
@@ -285,9 +267,7 @@ class DINOMaskDecoder(nn.Module):
         level_start_index: torch.Tensor,
     ) -> torch.Tensor:
         references = _boxes_xyxy_to_cxcywh(boxes_xyxy)
-        references = references[None, :, None].expand(
-            target.shape[0], -1, self.num_levels, -1
-        )
+        references = references[None, :, None].expand(target.shape[0], -1, self.num_levels, -1)
         for layer in self.layers:
             target = layer(
                 target,
@@ -306,9 +286,7 @@ class SameScaleMSDAEncoder(nn.Module):
     def __init__(self, visual_in_dims: Sequence[int], cfg: Qwen3VLSegConfig):
         super().__init__()
         if len(visual_in_dims) != cfg.msda_num_levels:
-            raise ValueError(
-                f"MSDA expects {cfg.msda_num_levels} levels, got {len(visual_in_dims)}"
-            )
+            raise ValueError(f"MSDA expects {cfg.msda_num_levels} levels, got {len(visual_in_dims)}")
         d = cfg.hidden_dim
         self.input_proj = nn.ModuleList(
             [
@@ -326,7 +304,7 @@ class SameScaleMSDAEncoder(nn.Module):
 
     def forward(
         self, features: Sequence[torch.Tensor]
-    ) -> Tuple[List[torch.Tensor], torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[list[torch.Tensor], torch.Tensor, torch.Tensor, torch.Tensor]:
         if len(features) != len(self.input_proj):
             raise ValueError(f"expected {len(self.input_proj)} ViT levels, got {len(features)}")
         real_hw = tuple(features[0].shape[-2:])
@@ -352,11 +330,7 @@ class SameScaleMSDAEncoder(nn.Module):
         chunks = memory.split(split_sizes, dim=1)
         maps = []
         for chunk, (height, width) in zip(chunks, spatial_shapes.tolist()):
-            maps.append(
-                chunk.transpose(1, 2).reshape(
-                    chunk.shape[0], chunk.shape[-1], int(height), int(width)
-                )
-            )
+            maps.append(chunk.transpose(1, 2).reshape(chunk.shape[0], chunk.shape[-1], int(height), int(width)))
         return maps, memory, spatial_shapes, starts
 
 
@@ -365,9 +339,7 @@ class SameScaleFPN(nn.Module):
 
     def __init__(self, hidden_dim: int, num_levels: int, gn_groups: int):
         super().__init__()
-        self.lateral = nn.ModuleList(
-            [nn.Conv2d(hidden_dim, hidden_dim, 1, bias=False) for _ in range(num_levels)]
-        )
+        self.lateral = nn.ModuleList([nn.Conv2d(hidden_dim, hidden_dim, 1, bias=False) for _ in range(num_levels)])
         self.output = nn.ModuleList(
             [
                 nn.Sequential(
@@ -390,9 +362,7 @@ class SameScaleFPN(nn.Module):
 
 
 class ShallowImageStem(nn.Module):
-    def __init__(
-        self, hidden_dim: int, mid_dim: int, gn_groups: int, output_stride: int = 4
-    ):
+    def __init__(self, hidden_dim: int, mid_dim: int, gn_groups: int, output_stride: int = 4):
         super().__init__()
         output_stride = int(output_stride)
         if output_stride not in (2, 4):
@@ -402,9 +372,12 @@ class ShallowImageStem(nn.Module):
             _group_norm(mid_dim, gn_groups),
             nn.GELU(),
             nn.Conv2d(
-                mid_dim, hidden_dim, 3,
+                mid_dim,
+                hidden_dim,
+                3,
                 stride=2 if output_stride == 4 else 1,
-                padding=1, bias=False,
+                padding=1,
+                bias=False,
             ),
             _group_norm(hidden_dim, gn_groups),
             nn.GELU(),
@@ -415,7 +388,7 @@ class ShallowImageStem(nn.Module):
 
 
 class PixelShuffleStage(nn.Module):
-    def __init__(self, in_dim: int, out_dim: Optional[int] = None):
+    def __init__(self, in_dim: int, out_dim: int | None = None):
         super().__init__()
         out_dim = int(in_dim if out_dim is None else out_dim)
         self.conv = nn.Conv2d(int(in_dim), out_dim * 4, 3, padding=1)
@@ -437,9 +410,7 @@ class ResidualPixelShuffleStage(nn.Module):
         nn.init.zeros_(self.conv.bias)
 
     def forward(self, feature: torch.Tensor) -> torch.Tensor:
-        base = F.interpolate(
-            feature, scale_factor=2.0, mode="bilinear", align_corners=False
-        )
+        base = F.interpolate(feature, scale_factor=2.0, mode="bilinear", align_corners=False)
         return base + self.shuffle(self.conv(feature))
 
 
@@ -471,9 +442,7 @@ class AdditivePixelFusion(nn.Module):
             nn.Conv2d(mask_dim, mask_dim, 3, padding=1, bias=False),
         )
 
-    def forward(
-        self, image: torch.Tensor, encoded_levels: Sequence[torch.Tensor]
-    ) -> torch.Tensor:
+    def forward(self, image: torch.Tensor, encoded_levels: Sequence[torch.Tensor]) -> torch.Tensor:
         fpn = self.upsample(self.fpn(encoded_levels))
         cnn = self.cnn(image)
         target_hw = tuple(max(1, int(value) // 2) for value in cnn.shape[-2:])
@@ -498,7 +467,7 @@ class AdditivePixelFusion(nn.Module):
 
 
 class DynamicMaskPredictor(nn.Module):
-    def __init__(self, hidden_dim: int, mask_dim: Optional[int] = None):
+    def __init__(self, hidden_dim: int, mask_dim: int | None = None):
         super().__init__()
         mask_dim = int(hidden_dim if mask_dim is None else mask_dim)
         self.kernel = nn.Sequential(
@@ -548,6 +517,7 @@ class FullCanvasAlphaCascadeHead(nn.Module):
         blocks = int(cfg.alpha_cascade_blocks)
         if blocks < 0:
             raise ValueError("alpha_cascade_blocks must be non-negative")
+
         def project(in_channels: int) -> nn.Sequential:
             return nn.Sequential(
                 nn.Conv2d(in_channels, channels, 3, padding=1, bias=False),
@@ -556,9 +526,7 @@ class FullCanvasAlphaCascadeHead(nn.Module):
             )
 
         def residual_stack() -> nn.Sequential:
-            return nn.Sequential(
-                *[AlphaResidualBlock(channels, groups) for _ in range(blocks)]
-            )
+            return nn.Sequential(*[AlphaResidualBlock(channels, groups) for _ in range(blocks)])
 
         self.semantic = project(mask_dim)
         self.rgb_s4 = project(3)
@@ -570,14 +538,10 @@ class FullCanvasAlphaCascadeHead(nn.Module):
 
         self.fuse_s4 = nn.Conv2d(3 * channels, channels, 1, bias=False)
         self.blocks_s4 = residual_stack()
-        self.up_s4_to_s2 = nn.ConvTranspose2d(
-            channels, channels, kernel_size=4, stride=2, padding=1, bias=False
-        )
+        self.up_s4_to_s2 = nn.ConvTranspose2d(channels, channels, kernel_size=4, stride=2, padding=1, bias=False)
         self.fuse_s2 = nn.Conv2d(5 * channels, channels, 1, bias=False)
         self.blocks_s2 = residual_stack()
-        self.up_s2_to_s1 = nn.ConvTranspose2d(
-            channels, channels, kernel_size=4, stride=2, padding=1, bias=False
-        )
+        self.up_s2_to_s1 = nn.ConvTranspose2d(channels, channels, kernel_size=4, stride=2, padding=1, bias=False)
         self.rgb_s1 = project(3)
         self.fuse_s1 = nn.Conv2d(4 * channels, channels, 1, bias=False)
         self.blocks_s1 = residual_stack()
@@ -593,21 +557,15 @@ class FullCanvasAlphaCascadeHead(nn.Module):
             nn.init.zeros_(output.bias)
 
     @staticmethod
-    def _resize(value: torch.Tensor, size: Tuple[int, int]) -> torch.Tensor:
+    def _resize(value: torch.Tensor, size: tuple[int, int]) -> torch.Tensor:
         if tuple(value.shape[-2:]) == tuple(size):
             return value
-        return F.interpolate(
-            value.float(), size=size, mode="bilinear", align_corners=False
-        ).to(dtype=value.dtype)
+        return F.interpolate(value.float(), size=size, mode="bilinear", align_corners=False).to(dtype=value.dtype)
 
     @staticmethod
-    def _condition(
-        feature: torch.Tensor, queries: torch.Tensor, affine: nn.Linear
-    ) -> torch.Tensor:
+    def _condition(feature: torch.Tensor, queries: torch.Tensor, affine: nn.Linear) -> torch.Tensor:
         scale, bias = affine(queries).chunk(2, dim=-1)
-        return feature * (
-            1.0 + 0.1 * scale.tanh()[:, :, None, None]
-        ) + 0.1 * bias[:, :, None, None]
+        return feature * (1.0 + 0.1 * scale.tanh()[:, :, None, None]) + 0.1 * bias[:, :, None, None]
 
     def forward(
         self,
@@ -616,16 +574,13 @@ class FullCanvasAlphaCascadeHead(nn.Module):
         queries: torch.Tensor,
         boxes_xyxy: torch.Tensor,
         coarse_logits: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         del boxes_xyxy  # Identity comes from the query and inherited coarse mask.
         num_queries = int(queries.shape[0])
         s2_hw = tuple(int(x) for x in coarse_logits.shape[-2:])
         s1_hw = tuple(int(x) for x in image.shape[-2:])
         if s1_hw != (2 * s2_hw[0], 2 * s2_hw[1]):
-            raise ValueError(
-                "alpha cascade requires an inherited S/2 canvas: "
-                f"image={s1_hw}, coarse={s2_hw}"
-            )
+            raise ValueError(f"alpha cascade requires an inherited S/2 canvas: image={s1_hw}, coarse={s2_hw}")
         s4_hw = (max(1, s2_hw[0] // 2), max(1, s2_hw[1] // 2))
 
         semantic_s2 = self.semantic(pixel_feature)
@@ -691,7 +646,7 @@ class FullCanvasAlphaCascadeHead(nn.Module):
 class WeVisOneMaskDecoder(nn.Module):
     """Final WeVisOne-VL v1 decoder with the S/1 alpha cascade."""
 
-    def __init__(self, visual_in_dims: List[int], llm_dim: int, cfg: Qwen3VLSegConfig):
+    def __init__(self, visual_in_dims: list[int], llm_dim: int, cfg: Qwen3VLSegConfig):
         super().__init__()
         self.visual_in_dims = [int(value) for value in visual_in_dims]
         self.llm_dim = int(llm_dim)
@@ -703,9 +658,7 @@ class WeVisOneMaskDecoder(nn.Module):
         )
         self.transformer = DINOMaskDecoder(cfg)
         self.pixel_fusion = AdditivePixelFusion(cfg)
-        self.mask_predictor = DynamicMaskPredictor(
-            cfg.hidden_dim, _mask_feature_dim(cfg)
-        )
+        self.mask_predictor = DynamicMaskPredictor(cfg.hidden_dim, _mask_feature_dim(cfg))
         # Keep the checkpoint module prefix ``highres_refine`` while exposing
         # only the one refinement implementation used by this release.
         self.highres_refine = FullCanvasAlphaCascadeHead(cfg)
@@ -716,11 +669,11 @@ class WeVisOneMaskDecoder(nn.Module):
     def forward(
         self,
         image: torch.Tensor,
-        visual_features_2d: List[torch.Tensor],
+        visual_features_2d: list[torch.Tensor],
         t_seg: torch.Tensor,
         boxes01: torch.Tensor,
-        grid_hw: Tuple[int, int],
-    ) -> Dict[str, torch.Tensor]:
+        grid_hw: tuple[int, int],
+    ) -> dict[str, torch.Tensor]:
         # The decoder weights expect FP32 execution regardless of the
         # backbone dtype.
         self.float()
@@ -736,19 +689,16 @@ class WeVisOneMaskDecoder(nn.Module):
     def _forward_fp32(
         self,
         image: torch.Tensor,
-        visual_features_2d: List[torch.Tensor],
+        visual_features_2d: list[torch.Tensor],
         t_seg: torch.Tensor,
         boxes01: torch.Tensor,
-        grid_hw: Tuple[int, int],
-    ) -> Dict[str, torch.Tensor]:
+        grid_hw: tuple[int, int],
+    ) -> dict[str, torch.Tensor]:
         if t_seg.shape[0] != boxes01.shape[0]:
-            raise ValueError(
-                f"#OBJ={t_seg.shape[0]} does not match #boxes={boxes01.shape[0]}"
-            )
+            raise ValueError(f"#OBJ={t_seg.shape[0]} does not match #boxes={boxes01.shape[0]}")
         if tuple(visual_features_2d[0].shape[-2:]) != tuple(grid_hw):
             raise ValueError(
-                f"raw ViT map {tuple(visual_features_2d[0].shape[-2:])} "
-                f"does not match pre-merge grid {tuple(grid_hw)}"
+                f"raw ViT map {tuple(visual_features_2d[0].shape[-2:])} does not match pre-merge grid {tuple(grid_hw)}"
             )
 
         encoded, memory, shapes, starts = self.visual_encoder(visual_features_2d)

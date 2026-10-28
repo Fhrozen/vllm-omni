@@ -70,11 +70,14 @@ def test_only_generated_tokens_are_scanned():
     ]
     assert constants.parse_seg_boxes_from_ids(generated) == GOLDEN_BOXES
     # A prompt box that is closed before any <OBJ> is not a query row at all.
-    assert constants.parse_seg_boxes_from_ids(
-        [constants.BOX_OPEN_TOKEN_ID_FALLBACK]
-        + [base + coord for coord in prompt_box]
-        + [constants.BOX_CLOSE_TOKEN_ID_FALLBACK, GOLDEN_SEG_TOKEN_ID]
-    ) == []
+    assert (
+        constants.parse_seg_boxes_from_ids(
+            [constants.BOX_OPEN_TOKEN_ID_FALLBACK]
+            + [base + coord for coord in prompt_box]
+            + [constants.BOX_CLOSE_TOKEN_ID_FALLBACK, GOLDEN_SEG_TOKEN_ID]
+        )
+        == []
+    )
 
 
 def test_generation_stops_at_eos():

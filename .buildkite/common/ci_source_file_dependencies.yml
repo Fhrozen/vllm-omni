@@ -194,6 +194,24 @@ x-lingbot-video: &lingbot_video
 x-lingbot-world: &lingbot_world
   - vllm_omni/diffusion/models/lingbot_world/
 
+x-wevisone-vl: &wevisone_vl
+  - vllm_omni/model_executor/models/wevisone/
+  - vllm_omni/model_executor/stage_input_processors/wevisone.py
+  - vllm_omni/model_extras/wevisone.py
+  - vllm_omni/model_extras/registry.py
+  - vllm_omni/model_executor/models/registry.py
+  - vllm_omni/data_entry_keys.py
+  - vllm_omni/outputs/output_modality.py
+  - vllm_omni/config/pipeline_registry.py
+  # Mask requests stay on the chat path through the chat_image_is_model_input
+  # declaration, so the serving gate is part of this feature's surface.
+  - vllm_omni/entrypoints/openai/serving_chat.py
+  - vllm_omni/entrypoints/openai/utils.py
+  - vllm_omni/deploy/wevisone_vl.yaml
+  - vllm_omni/deploy/wevisone_vl_text_only.yaml
+  # The e2e jobs run the CI overlay profile registered here.
+  - tests/helpers/stage_config.py
+
 
 source_file_dependencies:
   # Hardware presets and shared test helpers. Not a job key — do not attach this
@@ -333,6 +351,21 @@ source_file_dependencies:
     - examples/online_serving/qwen3_omni/
     - examples/online_serving/openai_chat_completion_client_for_multimodal_generation.py
     - tests/examples/online_serving/test_qwen3_omni.py
+
+  omni_wevisone_vl_function:
+    - *wevisone_vl
+    - tests/model_executor/models/wevisone/
+    - tests/model_executor/stage_input_processors/test_wevisone.py
+    - tests/engine/test_data_entry_keys.py
+    - tests/engine/test_output_modality.py
+    - tests/entrypoints/openai_api/test_modality_validation.py
+    - tests/entrypoints/openai_api/test_serving_chat_mask_choices.py
+    - tests/model_extras/test_model_extras.py
+    - tests/e2e/online_serving/test_wevisone_vl.py
+
+  omni_wevisone_vl_expansion:
+    - *wevisone_vl
+    - tests/e2e/online_serving/test_wevisone_vl_expansion.py
 
   omni_qwen2_5_omni_doc:
     - *qwen2_5_omni

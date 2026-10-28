@@ -114,8 +114,11 @@ from vllm_omni.model_extras.vace import (
 )
 from vllm_omni.model_extras.video_generation import VideoGenerationDefaults
 from vllm_omni.model_extras.wevisone import (
+    WEVISONE_CHAT_IMAGE_IS_MODEL_INPUT,
     WEVISONE_EXTRA_BODY_PARAMS,
     WEVISONE_EXTRA_OUTPUT_PARAMS,
+)
+from vllm_omni.model_extras.wevisone import (
     build_x_to_text_prompt as build_wevisone_x_to_text_prompt,
 )
 
@@ -370,8 +373,12 @@ _EXTRA_SPECS: dict[str, dict[str, Any]] = {
     "WeVisOneVLForConditionalGeneration": {
         "extra_body_params": WEVISONE_EXTRA_BODY_PARAMS,
         "extra_output_params": WEVISONE_EXTRA_OUTPUT_PARAMS,
+        "chat_image_is_model_input": WEVISONE_CHAT_IMAGE_IS_MODEL_INPUT,
     },
 }
+# Stage discovery reports the pixel-decoder stage for mask requests, so the
+# capability declared on the VLM must resolve from both architecture names.
+_EXTRA_SPECS["WeVisOnePixelDecoder"] = _EXTRA_SPECS["WeVisOneVLForConditionalGeneration"]
 _EXTRA_SPECS["MingImageLayeredDiffusionPipeline"] = _EXTRA_SPECS["MingImageDiffusionPipeline"]
 
 for model_class_name in ("LTX2Pipeline", "LTX2TwoStagePipeline"):
@@ -475,6 +482,19 @@ def should_preserve_reference_image_size(
 def should_init_extra_args_for_non_diffusion_stages(model_class_name: str | None) -> bool:
     spec = _get_spec(model_class_name)
     return bool(spec and spec.get("init_extra_args_for_non_diffusion_stages", False))
+
+
+def treats_chat_images_as_model_input(model_class_name: str | None) -> bool:
+    """Return whether a model reads chat images as its own multimodal input.
+
+    Image-serving treats an image in a chat message as a reference for image
+    generation, which only works when the model accepts the ``img2img`` modality.
+    Models that consume the chat image themselves (VLM understanding, mask
+    decoding) declare ``chat_image_is_model_input`` so the shared chat path --
+    and their prompt template -- stays in force.
+    """
+    spec = _get_spec(model_class_name)
+    return bool(spec and spec.get("chat_image_is_model_input", False))
 
 
 def get_ar_input_builder(model_class_name: str | None) -> Callable[..., Any] | None:

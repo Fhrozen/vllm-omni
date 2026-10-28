@@ -144,6 +144,69 @@ async def test_invalid_modalities_type_returns_error():
     assert "list of strings" in result.error.message
 
 
+def test_generation_prompt_path_respects_the_declaration():
+    """Only models without the model-input declaration are rerouted to img2img."""
+    from vllm_omni.entrypoints.openai.utils import uses_generation_prompt_path
+
+    assert uses_generation_prompt_path(["text", "image"], "HunyuanImage3ForCausalLM")
+    assert not uses_generation_prompt_path(["text", "image"], "WeVisOneVLForConditionalGeneration")
+    # Stage discovery reports the decoder stage, so the alias must resolve too.
+    assert not uses_generation_prompt_path(["text", "image"], "WeVisOnePixelDecoder")
+    assert not uses_generation_prompt_path(["text"], "WeVisOnePixelDecoder")
+    assert not uses_generation_prompt_path(None, "WeVisOnePixelDecoder")
+
+
+_LEGACY_DICT_STAGE = {
+    "stage_type": "llm",
+    "final_output": True,
+    "final_output_type": "image",
+    "engine_args": {"model_arch": "WeVisOnePixelDecoder"},
+}
+
+# Shape the engine actually hands serving: typed stage configs keep the model
+# arch on model_config, not in an engine_args dict.
+_TYPED_STAGE = SimpleNamespace(
+    stage_type="llm",
+    final_output=True,
+    final_output_type="image",
+    model_config=SimpleNamespace(model_arch="WeVisOnePixelDecoder"),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pixel_decoder_stage", [_LEGACY_DICT_STAGE, _TYPED_STAGE])
+async def test_declared_model_input_image_stays_on_the_chat_path(mocker, pixel_decoder_stage):
+    """A model that reads the chat image itself is not rerouted to img2img.
+
+    WeVisOne-VL answers mask requests with image parts, so 'image' is in its
+    output modalities and the request looks like image generation. Stage 0
+    consumes the chat image through its own processor, which has no img2img
+    parser, so the chat-template prompt must reach the engine unchanged.
+    """
+    serving = _make_serving_chat(["text", "image"], [pixel_decoder_stage])
+    serving._diffusion_engine = None
+    chat_prompt = [{"prompt": "chat-template output"}]
+    mocker.patch.object(serving, "_maybe_get_adapters", return_value=None)
+    mocker.patch.object(serving, "_build_sampling_params_list_from_request", return_value=[SamplingParams()])
+    mocker.patch.object(serving, "_preprocess_chat", new=AsyncMock(return_value=([], chat_prompt)))
+    serving.request_logger = None
+    mocker.patch.object(serving, "chat_completion_stream_generator", return_value="stream")
+    serving.engine_client.generate = mocker.Mock()
+
+    # Stream so the mocked generator is handed to the patched stream handler
+    # instead of being consumed by the non-stream response builder.
+    request = ChatCompletionRequest(
+        model="test-model",
+        messages=[{"role": "user", "content": "hello"}],
+        stream=True,
+        modalities=["text", "image"],
+    )
+    await serving._create_chat_completion(request)
+
+    assert serving._resolve_multistage_model_class_name(serving.engine_client) == "WeVisOnePixelDecoder"
+    assert serving.engine_client.generate.call_args.kwargs["prompt"] == chat_prompt[0]
+
+
 @pytest.mark.asyncio
 async def test_modalities_with_non_string_element_returns_error():
     """Modalities list with non-string elements must be rejected."""

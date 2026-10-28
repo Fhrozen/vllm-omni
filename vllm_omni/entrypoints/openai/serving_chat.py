@@ -150,11 +150,13 @@ from vllm_omni.entrypoints.openai.stage_params import (
     get_default_sampling_params_list,
 )
 from vllm_omni.entrypoints.openai.utils import (
+    get_stage_model_arch,
     get_stage_type,
     is_image_generation_stage,
     is_single_stage_diffusion,
     parse_lora_request,
     resolve_diffusion_od_config,
+    uses_generation_prompt_path,
 )
 from vllm_omni.errors import OmniClientError
 from vllm_omni.lora.request import LoRARequest
@@ -491,7 +493,8 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
         registry spec); falls back to the wrapper model arch declared on the
         final image-output stage so multistage wrappers without a diffusion
         od_config (e.g. the legacy generation-LLM DiT topology MammothModa2
-        used before #7134) still resolve.
+        used before #7134, and WeVisOne-VL's pixel-decoder stage) still
+        resolve.
         """
         cached = getattr(self, "_multistage_model_class_name", None)
         if cached is not None:
@@ -509,27 +512,7 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
             for stage_cfg in getattr(engine, "stage_configs", None) or []:
                 if not is_image_generation_stage(stage_cfg):
                     continue
-                stage_engine_args = getattr(stage_cfg, "engine_args", None)
-                if stage_engine_args is None and hasattr(stage_cfg, "get"):
-                    try:
-                        stage_engine_args = stage_cfg.get("engine_args")
-                    except Exception:
-                        stage_engine_args = None
-                for attr in ("model_class_name", "model_arch"):
-                    model_class_name = None
-                    if isinstance(stage_engine_args, dict):
-                        model_class_name = stage_engine_args.get(attr)
-                    elif stage_engine_args is not None and hasattr(stage_engine_args, "get"):
-                        try:
-                            model_class_name = stage_engine_args.get(attr)
-                        except Exception:
-                            model_class_name = None
-                    elif stage_engine_args is not None:
-                        model_class_name = getattr(stage_engine_args, attr, None)
-                    if model_class_name is None:
-                        model_class_name = getattr(stage_cfg, attr, None)
-                    if model_class_name is not None:
-                        break
+                model_class_name = get_stage_model_arch(stage_cfg)
                 if model_class_name is not None:
                     break
 
@@ -825,7 +808,12 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
         # processor can construct the correct inputs.
         # If we pass pre-tokenized chat-template ids, GLM-Image can become
         # effectively unconditioned and produce nonsense images.
-        if request.modalities and ("image" in request.modalities):
+        # Models that consume the chat image as input themselves (mask-producing
+        # VLMs such as WeVisOne-VL) stay on the chat path: reinterpreting their
+        # image as an img2img reference bypasses the template they need and hits
+        # a modality their processor cannot parse.
+        generation_prompt_model = self._resolve_multistage_model_class_name(self.engine_client)
+        if uses_generation_prompt_path(request.modalities, generation_prompt_model):
             try:
                 extracted_prompt, reference_images = self._extract_diffusion_prompt_and_images_from_messages(
                     request.messages

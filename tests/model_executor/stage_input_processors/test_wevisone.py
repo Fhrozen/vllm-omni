@@ -57,14 +57,16 @@ def _generated_ids(coords, obj_count=1):
 def _pooling_output(t_seg_rows, *, nested=True, t_seg=None):
     if t_seg is None:
         t_seg = torch.zeros((t_seg_rows, 3), dtype=torch.float32)
-    payload = {
+    group = {
         "features": torch.arange(1 * 3 * 2 * 2, dtype=torch.float32).reshape(1, 3, 2, 2),
         "grid_hw": torch.tensor([[2, 2]], dtype=torch.int32),
         "t_seg": t_seg,
         "canvas": torch.full((1, 3, 4, 4), 0.25, dtype=torch.float32),
         "mask_hw": torch.tensor([[4, 6]], dtype=torch.int32),
     }
-    return payload if nested else {f"segmentation.{key}": value for key, value in payload.items()}
+    # Two views of the same group: the nested dict the AR runner emits and the
+    # dotted-key form produced by flatten_payload.
+    return {"segmentation": group} if nested else {f"segmentation.{key}": value for key, value in group.items()}
 
 
 def _generated_box_request():
@@ -79,12 +81,10 @@ def test_full_payload_carries_boxes_reconstructed_from_generated_ids():
     request = _generated_box_request()
     # t_seg holds one row per token the runner fed back in, so it covers every
     # position of the request once generation is complete.
-    payload = wevisone.vlm2pixel_decoder_full_payload(
-        None, _pooling_output(len(request.all_token_ids)), request
-    )
+    payload = wevisone.vlm2pixel_decoder_full_payload(None, _pooling_output(len(request.all_token_ids)), request)
 
     assert payload is not None
-    assert payload["segmentation"]["boxes"].tolist() == pytest.approx(GOLDEN_BOX)
+    assert payload["segmentation"]["boxes"].tolist() == [pytest.approx(GOLDEN_BOX)]
     assert payload["segmentation"]["boxes"].dtype == torch.float32
     assert payload["ids"]["prompt"] == request.prompt_token_ids
     assert payload["ids"]["all"] == request.all_token_ids
@@ -104,9 +104,7 @@ def test_prompt_boxes_are_not_treated_as_answer_boxes():
     generated = _generated_ids(GOLDEN_COORDS, 1)
     request = _make_request(prompt, generated)
 
-    payload = wevisone.vlm2pixel_decoder_full_payload(
-        None, _pooling_output(len(request.all_token_ids)), request
-    )
+    payload = wevisone.vlm2pixel_decoder_full_payload(None, _pooling_output(len(request.all_token_ids)), request)
 
     assert payload is not None
     assert payload["segmentation"]["boxes"].shape == (1, 4)
@@ -155,20 +153,20 @@ def test_query_rows_that_were_never_fed_back_are_not_fabricated(caplog):
 
 
 def test_query_rows_are_selected_at_the_obj_positions_in_response_order():
-    # Two <OBJ> tokens follow one box, so box 0 pairs with the earlier query.
+    # Two <OBJ> tokens follow one box. Reference parity pairs query row i with
+    # box i and keeps min(boxes, rows), so box 0 pairs with the earlier query and
+    # the surplus row is dropped.
     request = _make_request([IMAGE_TOKEN], _generated_ids(GOLDEN_COORDS, 2))
     obj_positions = [i for i, token_id in enumerate(request.all_token_ids) if token_id == SEG_TOKEN_ID]
     assert len(obj_positions) == 2
 
-    t_seg = torch.arange(len(request.all_token_ids) * 3, dtype=torch.float32).reshape(
-        len(request.all_token_ids), 3
-    )
+    t_seg = torch.arange(len(request.all_token_ids) * 3, dtype=torch.float32).reshape(len(request.all_token_ids), 3)
     payload = wevisone.vlm2pixel_decoder_full_payload(None, _pooling_output(0, t_seg=t_seg), request)
 
     assert payload is not None
-    expected = torch.stack([t_seg[position] for position in obj_positions])
-    assert torch.equal(payload["segmentation"]["t_seg"], expected)
+    assert torch.equal(payload["segmentation"]["t_seg"], t_seg[[obj_positions[0]]])
     assert payload["segmentation"]["boxes"].shape == (1, 4)
+    assert payload["segmentation"]["boxes"].tolist() == [pytest.approx(GOLDEN_BOX)]
 
 
 def test_query_rows_keep_accumulation_semantics():

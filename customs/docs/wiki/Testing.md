@@ -16,7 +16,7 @@ Env knobs of the e2e test: `QD_MODEL_DIR`, `QD_DEPLOY`, `QD_GOLDEN_DIR`, `QD_SCE
 
 Lint: `ruff` is installed into the venv on demand (`uv pip install ruff`); changed files pass `ruff check` and `ruff format --check`.
 
-Pass criteria seen so far (2x RTX 5060 Ti): unit 19/19; offline 6/6 FP8 and 6/6 BF16; online 11/11 FP8; ADE vs the HF golden 0.026-0.112 m, same order as the reference's own eager-vs-sdpa noise (0.02-0.06 m).
+Pass criteria seen so far (measured on the earlier 2x RTX 5060 Ti host, not re-run on the current 2x RTX 3060 machine): unit 19/19; offline 6/6 FP8 and 6/6 BF16; online 11/11 FP8; ADE vs the HF golden 0.026-0.112 m, same order as the reference's own eager-vs-sdpa noise (0.02-0.06 m).
 
 ## Ideogram 4
 
@@ -36,3 +36,37 @@ Golden parity procedure (once a checkpoint and the reference snapshot are availa
 4. Record peak memory for `clone` and `keep` (the `keep` case is the one that needs layerwise offload on a 16 GB card).
 
 Lint: changed files must pass `ruff check` and `ruff format --check` inside the venv.
+
+## WeVisOne-VL
+
+Runs through `customs/wevisone/docker_run.sh` (same image and shared `.venv` as
+`customs/qwen_drive/docker_run.sh`, plus `--entrypoint bash` for images whose `ENTRYPOINT` is not a shell,
+e.g. `vllm/vllm-openai`). The wrapper exports `PYTHONPATH=/workspace` (`QD_PYTHONPATH` to override) because
+the shared venv has no editable install of `vllm_omni`.
+
+| What | Command | Notes |
+|------|---------|-------|
+| L1 CPU unit tests | `bash customs/wevisone/run_tests.sh` | 141 passed on this host in `vllm/vllm-openai:latest` (the WeVisOne model tests plus the mask-choice, stage-bridge and model_extras files); an earlier run of the whole `tests/model_executor/models/wevisone` set measured 224 passed / 8 deselected. Container deps installed on demand: `aenum omegaconf prettytable regex diffusers pytest_asyncio pytest_xdist pyyaml pytest_mock`. Knobs: `WVS_MARKERS`, `WVS_GPUS`, `WVS_IMAGE`; extra args go to pytest |
+| Golden parity | `WVS_MARKERS='local_model and cpu' bash customs/wevisone/run_tests.sh tests/model_executor/models/wevisone/test_wevisone_golden_parity.py` | 4 passed against `customs/wevisone/golden/matting/`. `--run-level` does not accept `local_model`; select with `-m` only |
+| Reference oracle | `bash customs/wevisone/run_golden.sh` | writes `golden/<task>/result.json` + `masks/mask_NNN.npy`; masks differ run to run (~5e-4), so comparisons use tolerances (box 0.001, mean mask 0.02) |
+| L2 online serving (2 GPUs) | `bash customs/wevisone/run_e2e_test.sh` | the test starts its own server; `WVS_GPUS` defaults to `device=0,1` because `wevisone_vl.yaml` puts stage 0 on device 0 and the decoder on device 1. **Executed on this machine**: 2 passed in 184.54 s (matting 109.74 s, server startup 98.036 s) with `WEVISONE_MODEL_PATH=/workspace/extra_repos/WeVisOne-VL-4B` |
+| L4 expansion (2 GPUs) | `WVS_LEVEL=full_model bash customs/wevisone/run_e2e_test.sh tests/e2e/online_serving/test_wevisone_vl_expansion.py` | `WVS_LEVEL` sets both `-m` and `--run-level`; needs weights for `tencent/WeVisOne-VL-4B` or `WEVISONE_MODEL_PATH`. Authored, **not yet executed on this machine** |
+
+### Why the WeVisOne e2e is `advanced_model` only
+
+`tests/helpers/stage_config.py` patches every stage to `load_format: dummy` for `core_model` runs, so a
+`core_model` e2e serves random weights and the AR stage emits random tokens — there is no box span to
+pair a mask with. The WeVisOne e2e therefore carries only `advanced_model`, and the `core_model` Buildkite
+step for it was removed from `.buildkite/cuda/test-ready.yml`; `test-merge.yml` keeps the
+`advanced_model and cuda` step. Quote from the test file: "Real weights are required: a core_model run
+patches every stage to dummy weights, so the AR stage would emit random tokens and no box span to pair a
+mask with."
+
+Gates measured clean: `check_spdx_header.py`, `check_test_marks.py`, `check_buildkite.py`,
+`check_forbidden_imports.py`.
+
+Lint with the pre-commit pin (`ruff==0.14.10`, installed on demand in the shared venv): `ruff check` is
+clean on every WeVisOne file, and `ruff format` reformatted 11 of them (typing modernisation `UP006`/
+`UP035`/`UP045`/`UP037`, import sorting `I001`, two unused imports, one dead local, two long lines in
+`customs/wevisone/`). Tests re-run after the fixes: still 224 passed / 8 deselected and 4 golden-parity
+passed. Note that `ruff` 0.13 formats differently from the pinned 0.14.10, so use the pinned version.

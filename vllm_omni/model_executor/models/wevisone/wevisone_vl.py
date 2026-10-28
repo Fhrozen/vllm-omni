@@ -37,24 +37,26 @@ Two constraints follow from the reference implementation and are enforced here:
 
 from __future__ import annotations
 
+import gc
 from itertools import islice
 
 import torch
+from torch import nn
 from vllm.compilation.decorators import support_torch_compile
-from vllm.config import VllmConfig
+from vllm.compilation.wrapper import TorchCompileWithNoGuardsWrapper
+from vllm.config import VllmConfig, get_current_vllm_config
 from vllm.distributed import get_pp_group
-from vllm.distributed.parallel_state import PPMissingLayer
+from vllm.logger import init_logger
 from vllm.model_executor.layers.logits_processor import LogitsProcessor
 from vllm.model_executor.layers.vocab_parallel_embedding import ParallelLMHead
 from vllm.model_executor.models.qwen3_vl import (
-    Qwen3VLDummyInputsBuilder,
-    Qwen3VLMultiModalProcessor,
-    Qwen3VLProcessingInfo,
-    Qwen3VLForConditionalGeneration,
     Qwen3LLMForCausalLM,
     Qwen3LLMModel,
+    Qwen3VLDummyInputsBuilder,
+    Qwen3VLForConditionalGeneration,
+    Qwen3VLProcessingInfo,
 )
-from vllm.model_executor.models.utils import maybe_prefix
+from vllm.model_executor.models.utils import PPMissingLayer, StageMissingLayer, maybe_prefix
 from vllm.multimodal import MULTIMODAL_REGISTRY
 from vllm.sequence import IntermediateTensors
 
@@ -62,13 +64,12 @@ from vllm_omni.data_entry_keys import OmniPayload
 from vllm_omni.model_executor.models.output_templates import OmniOutput
 
 from .config import Qwen3VLSegConfig
-from .processing import CANVAS_KEY, HW_KEY, WeVisOneMultiModalProcessor
 from .feature_bridge import (
     VisualFeatureCapture,
     per_sample_premerge_feature_maps,
     premerge_grid_hw,
 )
-
+from .processing import CANVAS_KEY, HW_KEY, WeVisOneMultiModalProcessor
 
 _DYNAMIC_ARG_DIMS = {
     "input_ids": 0,
@@ -78,6 +79,45 @@ _DYNAMIC_ARG_DIMS = {
     # the same shape as input_embeds
     "deepstack_input_embeds": 0,
 }
+
+logger = init_logger(__name__)
+
+
+def _drop_parent_language_model(model: nn.Module, prefix: str) -> None:
+    """Unregister the stock Qwen3 LM that the Qwen3-VL parent ``__init__`` builds.
+
+    WeVisOne swaps it for ``WeVisOneQwen3LLMForCausalLM``, whose forward can return
+    the last decoder layer output.  The parent's attention layers are already
+    registered in the static forward context as ``{prefix}.language_model.model.layers.*``,
+    so leaving them behind would size the KV cache for two decoder stacks.  Same
+    approach as ``mammoth_moda2``.
+    """
+    old = model.language_model
+    if isinstance(old, StageMissingLayer):  # mm_encoder_only
+        old = old.__dict__["module"]
+    ctx = get_current_vllm_config().compilation_config.static_forward_context
+    owned = set(old.modules())
+    dropped = [name for name, layer in ctx.items() if layer in owned]
+    for name in dropped:
+        del ctx[name]
+    stale = [name for name in ctx if name.startswith(maybe_prefix(prefix, "language_model."))]
+    # A later pipeline rank may hold none of the parent's layers, so only the first
+    # rank has to find some; no rank may leave any behind.
+    pp_group = get_pp_group()
+    must_drop = pp_group.world_size == 1 or pp_group.is_first_rank
+    if (must_drop and not dropped) or stale:
+        raise RuntimeError(
+            f"Unexpected attention registry for the parent language model (dropped {len(dropped)}, left {stale}); "
+            "check the Qwen3-VL __init__."
+        )
+    # With torch.compile, the compile wrapper's bytecode hook would keep the module alive.
+    for module in owned:
+        if isinstance(module, TorchCompileWithNoGuardsWrapper):
+            module.cleanup()
+    logger.debug("Dropped %d attention layers of the parent language model.", len(dropped))
+    del model.language_model, old, owned
+    gc.collect()
+    torch.accelerator.empty_cache()
 
 
 @support_torch_compile(dynamic_arg_dims=_DYNAMIC_ARG_DIMS)
@@ -111,32 +151,21 @@ class WeVisOneQwen3LLMModel(Qwen3LLMModel):
             hidden_states = intermediate_tensors["hidden_states"]
             residual = intermediate_tensors["residual"]
 
-        for layer_idx, layer in islice(
-            enumerate(self.layers), self.start_layer, self.end_layer
-        ):
+        for layer_idx, layer in islice(enumerate(self.layers), self.start_layer, self.end_layer):
             hidden_states, residual = layer(
                 positions,
                 hidden_states,
                 residual,
             )
 
-            if deepstack_input_embeds is not None and layer_idx in range(
-                0, len(deepstack_input_embeds)
-            ):
-                hidden_states = (
-                    hidden_states
-                    + deepstack_input_embeds[f"deepstack_input_embeds_{layer_idx}"]
-                )
+            if deepstack_input_embeds is not None and layer_idx in range(0, len(deepstack_input_embeds)):
+                hidden_states = hidden_states + deepstack_input_embeds[f"deepstack_input_embeds_{layer_idx}"]
 
         if not get_pp_group().is_last_rank:
-            return IntermediateTensors(
-                {"hidden_states": hidden_states, "residual": residual}
-            )
+            return IntermediateTensors({"hidden_states": hidden_states, "residual": residual})
 
         # Reconstruct the logical last-layer output before the final norm.
-        last_layer_output = (
-            hidden_states.clone() if residual is None else hidden_states + residual
-        )
+        last_layer_output = hidden_states.clone() if residual is None else hidden_states + residual
         hidden_states, _ = self.norm(hidden_states, residual)
 
         if return_last_layer_output:
@@ -146,15 +175,17 @@ class WeVisOneQwen3LLMModel(Qwen3LLMModel):
 
 class WeVisOneQwen3LLMForCausalLM(Qwen3LLMForCausalLM):
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
-        super(Qwen3LLMForCausalLM, self).__init__()
+        # Not super(): Qwen3ForCausalLM.__init__ would build a decoder stack
+        # under this prefix, and the layer-name registry rejects the duplicate
+        # names produced by replacing self.model below. vLLM's own subclass
+        # skips the same ancestor.
+        torch.nn.Module.__init__(self)
         config = vllm_config.model_config.hf_config.text_config
         quant_config = vllm_config.quant_config
 
         self.config = config
         self.quant_config = quant_config
-        self.model = WeVisOneQwen3LLMModel(
-            vllm_config=vllm_config, prefix=maybe_prefix(prefix, "model")
-        )
+        self.model = WeVisOneQwen3LLMModel(vllm_config=vllm_config, prefix=maybe_prefix(prefix, "model"))
 
         if get_pp_group().is_last_rank:
             if config.tie_word_embeddings:
@@ -170,9 +201,7 @@ class WeVisOneQwen3LLMForCausalLM(Qwen3LLMForCausalLM):
             self.lm_head = PPMissingLayer()
 
         self.logits_processor = LogitsProcessor(config.vocab_size)
-        self.make_empty_intermediate_tensors = (
-            self.model.make_empty_intermediate_tensors
-        )
+        self.make_empty_intermediate_tensors = self.model.make_empty_intermediate_tensors
 
 
 @MULTIMODAL_REGISTRY.register_processor(
@@ -187,10 +216,12 @@ class WeVisOneVLForConditionalGeneration(Qwen3VLForConditionalGeneration):
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
         super().__init__(vllm_config=vllm_config, prefix=prefix)
+        _drop_parent_language_model(self, prefix)
         # Replaced wholesale so weight names stay `language_model.model.*`.
         self.language_model = WeVisOneQwen3LLMForCausalLM(
             vllm_config=vllm_config, prefix=maybe_prefix(prefix, "language_model")
         )
+        self.make_empty_intermediate_tensors = self.language_model.make_empty_intermediate_tensors
 
         self.seg_config = Qwen3VLSegConfig()
         self.spatial_merge_size = int(self.config.vision_config.spatial_merge_size)
@@ -219,18 +250,14 @@ class WeVisOneVLForConditionalGeneration(Qwen3VLForConditionalGeneration):
             grid_thw,
             self.spatial_merge_size,
         )
-        self._pending_features = [torch.stack(maps, dim=0) for maps in per_sample]
-        self._pending_grid_hw = [
-            torch.tensor([h, w], dtype=torch.int64) for h, w in premerge_grid_hw(grid_thw)
-        ]
+        self._pending_features = per_sample
+        self._pending_grid_hw = [torch.tensor([h, w], dtype=torch.int64) for h, w in premerge_grid_hw(grid_thw)]
         # Extra fields produced by WeVisOneMultiModalProcessor, already in image
         # order and kept on CPU so the stage input processor can forward them.
         canvases = kwargs.get(CANVAS_KEY)
         hw = kwargs.get(HW_KEY)
         if canvases is not None and hw is not None:
-            self._pending_canvas = [
-                canvas.unsqueeze(0).contiguous() for canvas in canvases
-            ]
+            self._pending_canvas = [canvas.unsqueeze(0).contiguous() for canvas in canvases]
             self._pending_mask_hw = [row for row in hw]
         return embeddings
 
@@ -245,14 +272,8 @@ class WeVisOneVLForConditionalGeneration(Qwen3VLForConditionalGeneration):
         if intermediate_tensors is not None:
             inputs_embeds = None
 
-        if (
-            self.use_deepstack
-            and inputs_embeds is not None
-            and get_pp_group().is_first_rank
-        ):
-            deepstack_input_embeds = self._get_deepstack_input_embeds(
-                inputs_embeds.size(0)
-            )
+        if self.use_deepstack and inputs_embeds is not None and get_pp_group().is_first_rank:
+            deepstack_input_embeds = self._get_deepstack_input_embeds(inputs_embeds.size(0))
         else:
             deepstack_input_embeds = None
 
@@ -270,9 +291,7 @@ class WeVisOneVLForConditionalGeneration(Qwen3VLForConditionalGeneration):
 
         return hidden_states, last_layer_output
 
-    def make_omni_output(
-        self, model_outputs: torch.Tensor | OmniOutput, **kwargs: object
-    ) -> OmniOutput:
+    def make_omni_output(self, model_outputs: torch.Tensor | OmniOutput, **kwargs: object) -> OmniOutput:
         if isinstance(model_outputs, OmniOutput):
             return model_outputs
 

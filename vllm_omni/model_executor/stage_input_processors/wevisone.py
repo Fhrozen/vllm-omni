@@ -92,7 +92,7 @@ def vlm2pixel_decoder_full_payload(
     all_token_ids = _ensure_list(getattr(request, "all_token_ids", None) or [])
     if not all_token_ids:
         all_token_ids = prompt_token_ids + _ensure_list(getattr(request, "output_token_ids", []) or [])
-    generated_token_ids = all_token_ids[len(prompt_token_ids):]
+    generated_token_ids = all_token_ids[len(prompt_token_ids) :]
 
     boxes = parse_seg_boxes_from_ids(generated_token_ids)
     if not boxes:
@@ -117,7 +117,7 @@ def vlm2pixel_decoder_full_payload(
     rows = [i for i, token_id in enumerate(all_token_ids) if token_id == seg_token_id]
     available = int(t_seg.shape[0]) if t_seg is not None else 0
     usable = [row for row in rows if row < available]
-    if len(usable) != len(boxes):
+    if not usable:
         logger.warning(
             "vlm2pixel_decoder_full_payload: req=%s has %s <OBJ> positions (%s usable rows) "
             "but %s parsed boxes; dropping the request's masks. t_seg rows=%s ids_len=%s",
@@ -129,10 +129,25 @@ def vlm2pixel_decoder_full_payload(
             len(all_token_ids),
         )
         return None
-    if not usable:
-        return None
 
-    query_rows = t_seg[usable]  # type: ignore[index]
+    # Reference parity: the decoder pairs query row i with box i and takes
+    # ``min(len(boxes), t_seg rows)``, so extra <OBJ> rows are dropped rather
+    # than invented pairings.
+    count = min(len(boxes), len(usable))
+    if count != len(boxes):
+        logger.warning(
+            "vlm2pixel_decoder_full_payload: req=%s has %s <OBJ> positions (%s usable rows) "
+            "but %s parsed boxes; pairing positionally and dropping the extra %s. t_seg rows=%s ids_len=%s",
+            rid,
+            len(rows),
+            len(usable),
+            len(boxes),
+            len(boxes) - count,
+            available,
+            len(all_token_ids),
+        )
+    boxes = boxes[:count]
+    query_rows = t_seg[usable[:count]]  # type: ignore[index]
 
     payload: OmniPayload = {
         "ids": {"all": list(all_token_ids), "prompt": list(prompt_token_ids)},

@@ -34,20 +34,25 @@ def test_premerge_tokens_to_2d_undoes_the_patch_shuffle():
     tokens = _shuffle_to_tokens(plane, merge_size=2)
 
     # Without the inverse permutation the round trip would not close.
-    scrambled = tokens.reshape(6, 8, 3).permute(2, 0, 1).unsqueeze(0)
+    scrambled = tokens.reshape(6, 8, 3).permute(2, 0, 1)
     restored = feature_bridge.premerge_tokens_to_2d(tokens, (6, 8), 2)
-    assert torch.equal(restored, plane.permute(2, 0, 1).unsqueeze(0))
+    assert torch.equal(restored, plane.permute(2, 0, 1))
     assert not torch.equal(restored, scrambled)
-    assert tuple(restored.shape) == (1, 3, 6, 8)
+    assert tuple(restored.shape) == (3, 6, 8)
 
 
 def test_premerge_tokens_to_2d_keeps_a_single_neighbourhood_together():
     """Each merge block must land in its own m x m window of the restored map."""
     tokens = torch.arange(4 * 4, dtype=torch.float32).reshape(16, 1)
-    plane = feature_bridge.premerge_tokens_to_2d(tokens, (4, 4), 2)[0, 0]
+    plane = feature_bridge.premerge_tokens_to_2d(tokens, (4, 4), 2)[0]
     # Token order is block-major: block (0,0) covers values 0..3 at rows 0-1, cols 0-1,
     # then block (0,1) covers 4..7 at rows 0-1, cols 2-3.
-    assert plane.tolist() == [[0.0, 1.0, 4.0, 5.0], [2.0, 3.0, 6.0, 7.0], [8.0, 9.0, 12.0, 13.0], [10.0, 11.0, 14.0, 15.0]]
+    assert plane.tolist() == [
+        [0.0, 1.0, 4.0, 5.0],
+        [2.0, 3.0, 6.0, 7.0],
+        [8.0, 9.0, 12.0, 13.0],
+        [10.0, 11.0, 14.0, 15.0],
+    ]
 
 
 def test_premerge_tokens_to_2d_rejects_shape_mismatch():
@@ -59,6 +64,27 @@ def test_premerge_tokens_to_2d_rejects_shape_mismatch():
         feature_bridge.premerge_tokens_to_2d(tokens, (6, 4), 2)
     with pytest.raises(ValueError, match="do not match grid"):
         feature_bridge.premerge_tokens_to_2d(tokens.reshape(4, 4, 3), (4, 4), 2)
+
+
+def test_feature_maps_stack_layers_into_the_payload_shape():
+    """A request payload carries one ``[layers, C, H, W]`` tensor per image.
+
+    The capture is a dict of ``[N, C]`` rows, so the map shape is what keeps the
+    cross-stage contract single-tensor-per-request instead of a nested list.
+    """
+    # The processor hands the model a per-image (t, h, w) grid; t is 1 for images.
+    image_grid_thw = torch.tensor([[1, 4, 4], [1, 2, 6]], dtype=torch.int64)
+    layers = (5, 23)
+    planes = (torch.zeros(4, 4, 3), torch.zeros(2, 6, 3))
+    # Each captured layer holds every image's tokens concatenated in grid order.
+    captured = {layer: torch.cat([_shuffle_to_tokens(plane, merge_size=2) for plane in planes]) for layer in layers}
+
+    per_sample = feature_bridge.per_sample_premerge_feature_maps(captured, layers, image_grid_thw, 2)
+    assert [tuple(map.shape) for map in per_sample] == [(2, 3, 4, 4), (2, 3, 2, 6)]
+    assert torch.equal(per_sample[0][0], torch.zeros(3, 4, 4))
+
+    with pytest.raises(RuntimeError, match="was not captured before its merger"):
+        feature_bridge.per_sample_premerge_feature_maps({5: torch.zeros(16, 3)}, (5, 23), image_grid_thw[:1], 2)
 
 
 def test_split_concat_tokens_splits_per_image():
@@ -142,3 +168,21 @@ def test_capture_records_the_state_before_each_merger():
     assert sorted(capture.premerge_features) == [11, 23]
     assert torch.equal(capture.premerge_features[11], layer_11)
     assert torch.equal(capture.premerge_features[23], block_23)
+
+
+def test_capture_folds_the_attention_layout_singleton_dim():
+    """A ``[N, 1, C]`` merger input is stored as the ``[N, C]`` rows the decoder expects."""
+    visual = _fake_visual()
+    capture = feature_bridge.VisualFeatureCapture(SimpleNamespace(visual=visual), (11, 23))
+
+    with capture:
+        visual.deepstack_merger_list[1](torch.full((4, 1, 3), 7.0))
+        visual.merger(torch.full((2, 1, 3), 9.0))
+
+    assert capture.premerge_features[11].shape == (4, 3)
+    assert capture.premerge_features[23].shape == (2, 3)
+    assert torch.equal(capture.premerge_features[11], torch.full((4, 3), 7.0))
+    # Rows keep their patch order, which is what the un-shuffle in premerge_tokens_to_2d
+    # depends on, so the fold must not reorder them.
+    tokens = torch.arange(6 * 3, dtype=torch.float32).reshape(6, 1, 3)
+    assert torch.equal(feature_bridge.as_token_rows(tokens), torch.arange(6 * 3, dtype=torch.float32).reshape(6, 3))

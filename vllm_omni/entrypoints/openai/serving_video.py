@@ -33,7 +33,12 @@ from vllm_omni.entrypoints.openai.stage_params import (
     build_stage_sampling_params_list,
     get_default_sampling_params_list,
 )
-from vllm_omni.entrypoints.openai.utils import get_stage_type, is_video_generation_pipeline, parse_lora_request
+from vllm_omni.entrypoints.openai.utils import (
+    get_stage_model_arch,
+    get_stage_type,
+    is_video_generation_pipeline,
+    parse_lora_request,
+)
 from vllm_omni.entrypoints.openai.video_api_utils import (
     _encode_video_bytes,
     _PlanarFrameConverter,
@@ -67,14 +72,7 @@ def _stage_diffusion_model_class_name(stage_config: Any) -> str | None:
     if model_class_name:
         return str(model_class_name)
 
-    model_config = _config_value(stage_config, "model_config")
-    model_arch = _config_value(model_config, "model_arch") or _config_value(stage_config, "model_arch")
-    if model_arch:
-        return str(model_arch)
-
-    engine_args = _config_value(stage_config, "engine_args", {})
-    model_class_name = _config_value(engine_args, "model_class_name")
-    return str(model_class_name) if model_class_name else None
+    return get_stage_model_arch(stage_config)
 
 
 if TYPE_CHECKING:

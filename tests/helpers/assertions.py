@@ -9,6 +9,7 @@ import io
 import json
 import math
 import os
+import re
 import tempfile
 import threading
 import wave
@@ -283,6 +284,121 @@ def assert_images_generations_response(
         image = Image.open(io.BytesIO(base64.b64decode(b64_json)))
         image.load()
         assert_image_valid(image, width=width, height=height)
+
+
+def _decode_data_url_image_part(part: dict[str, Any]) -> Image.Image:
+    """Decode an ``image_url`` content part that carries a base64 PNG data URL."""
+    url = part.get("image_url", {}).get("url", "")
+    assert isinstance(url, str) and url.startswith("data:image/png;base64,"), (
+        f"Mask parts must carry a PNG data URL, got {url!r}"
+    )
+    image = Image.open(io.BytesIO(base64.b64decode(url.split(",", 1)[1])))
+    image.load()
+    return image
+
+
+_BOX_SPAN_RE = re.compile(r"<box>.*?</box>", re.IGNORECASE)
+
+
+def assert_chat_mask_choices(
+    response: dict[str, Any],
+    request_config: dict[str, Any],
+    run_level: str | None = None,
+) -> None:
+    """Validate a chat response that carries segmentation masks as image parts.
+
+    Expected request_config schema:
+        {
+            "key_words": list[str] | None,        # substrings required in the text part
+            "mask_count": int | None,             # expected number of mask image parts
+            "mask_size": tuple[int, int] | None,  # expected (width, height) of every mask
+            "mask_extrema": tuple[int, int] | None; # (max background gray, min foreground gray) per mask
+        }
+
+    Masks are emitted as one PNG per query and paired positionally with the box at the
+    same rank, so mask ``i`` must carry ``mask_index == i`` and the box count in the text
+    part must cover every mask. A lone mask keeps its own rank and carries no
+    ``mask_index``, which is unambiguous because it is the only one. Masks are grayscale
+    probability maps, never RGB.
+    """
+    choices = response.get("choices")
+    assert isinstance(choices, list) and choices, "Chat response is missing choices[]"
+
+    # A two-final-stage pipeline emits one choice per stage, so the structured text and
+    # the masks may sit in different choices; a single-stage response keeps them in one
+    # mixed part list. Collect both across every choice so the pairing can still be checked.
+    text = ""
+    image_parts: list[dict[str, Any]] = []
+    for choice in choices:
+        content = choice.get("message", {}).get("content")
+        if isinstance(content, str):
+            text = text or content
+        elif isinstance(content, list):
+            for part in content:
+                if part.get("type") == "text" and not text:
+                    text = part.get("text") or ""
+                elif part.get("type") == "image_url":
+                    image_parts.append(part)
+
+    assert text, "Chat response has no text part carrying the structured output"
+    print(f"structured text output is: {text}")
+
+    if run_level in {"advanced_model", "full_model"}:
+        for keyword in request_config.get("key_words") or []:
+            assert str(keyword).lower() in text.lower(), (
+                f"The text part does not contain any of the keywords ({keyword!r})."
+            )
+
+    assert image_parts, "Chat response has no mask image parts"
+    expected_count = request_config.get("mask_count")
+    if expected_count is not None:
+        assert len(image_parts) == int(expected_count), f"Expected {int(expected_count)} masks, got {len(image_parts)}"
+
+    expected_size = request_config.get("mask_size")
+    masks: list[Image.Image] = []
+    for rank, part in enumerate(image_parts):
+        mask_index = part.get("mask_index")
+        if mask_index is None:
+            # Only a single-mask payload omits the ordinal; its rank is unambiguous.
+            assert len(image_parts) == 1 and rank == 0, (
+                f"Mask part {rank} has no mask_index; only a lone mask may omit it, got {len(image_parts)} mask parts."
+            )
+        else:
+            assert mask_index == rank, f"Mask part {rank} must carry mask_index == {rank}, got {mask_index!r}"
+        image = _decode_data_url_image_part(part)
+        assert image.mode == "L", f"Mask parts must be grayscale, got mode={image.mode}"
+        assert_image_valid(image)
+        if expected_size is not None:
+            assert image.size == tuple(expected_size), f"Mask {rank} is {image.size}, expected {tuple(expected_size)}"
+        masks.append(image)
+
+    if len({mask.size for mask in masks}) > 1:
+        sizes = [mask.size for mask in masks]
+        raise AssertionError(f"Masks must share one canvas size, got {sizes}")
+
+    if run_level in {"advanced_model", "full_model"}:
+        extrema_gate = request_config.get("mask_extrema")
+        for rank, mask in enumerate(masks):
+            minimum, maximum = mask.getextrema()
+            if extrema_gate is not None:
+                background_max, foreground_min = extrema_gate
+                assert minimum <= background_max and maximum >= foreground_min, (
+                    f"Mask {rank} is flat ({minimum}-{maximum}); the pixel decoder did not separate "
+                    f"foreground from background (need <= {background_max} and >= {foreground_min})."
+                )
+            print(f"mask {rank} gray range: {minimum}-{maximum}")
+
+    boxes = _BOX_SPAN_RE.findall(text)
+    assert boxes, "The text part carries no box span, so masks cannot be paired with boxes"
+    assert len(boxes) >= len(image_parts), (
+        f"Only {len(boxes)} boxes for {len(image_parts)} masks: the pairing is shorter than the masks"
+    )
+    if run_level == "full_model":
+        # The stage processor keeps ``min(len(boxes), t_seg rows)`` pairs, and a box is only
+        # recorded when it is followed by ``<OBJ>``, so a complete answer pairs one mask per box.
+        assert len(boxes) == len(image_parts), (
+            f"Expected one mask per box, got {len(boxes)} boxes and {len(image_parts)} masks"
+        )
 
 
 def assert_video_diffusion_response(

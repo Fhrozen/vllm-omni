@@ -11,7 +11,7 @@ JSON=${1:-/workspace/customs/wevisone/samples.json}
 OUT=${2:-/workspace/customs/wevisone/output}
 shift $(( $# < 2 ? $# : 2 ))
 
-"${SCRIPT_DIR}/../qwen_drive/docker_run.sh" \
+"${SCRIPT_DIR}/docker_run.sh" \
     "python customs/wevisone/generate_samples.py --json ${JSON} --out-dir ${OUT} $*"
 
 # Review the overlays afterwards:

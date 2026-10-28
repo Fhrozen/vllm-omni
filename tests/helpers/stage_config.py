@@ -641,6 +641,47 @@ _CI_OVERLAYS: dict[str, dict[str, Any]] = {
             },
         ],
     },
+    "wevisone_vl": {
+        "base_config": "wevisone_vl.yaml",
+        # Profile for a 12 GiB consumer card (RTX 3060, SM86). The bf16 4B
+        # weights already take 9.2 GiB, so the stage-0 memory budget has to be
+        # sized from weights alone instead of a dummy multimodal input: the
+        # default dummy image profiles 16k vision tokens and OOMs before KV
+        # cache allocation.
+        "stages": [
+            {
+                "stage_id": 0,
+                "max_num_seqs": 1,
+                "max_model_len": 4096,
+                "max_num_batched_tokens": 2048,
+                "gpu_memory_utilization": 0.90,
+                "skip_mm_profiling": True,
+            },
+            {
+                "stage_id": 1,
+                # The pixel decoder is 9.6M parameters; the budget only has to
+                # cover the 1024x1024 canvas activations.
+                "max_num_seqs": 1,
+                "max_model_len": 2048,
+                "max_num_batched_tokens": 512,
+                "gpu_memory_utilization": 0.40,
+            },
+        ],
+    },
+    "wevisone_vl_text_only": {
+        "base_config": "wevisone_vl_text_only.yaml",
+        "pipeline": "wevisone_vl_text_only",
+        "stages": [
+            {
+                "stage_id": 0,
+                "max_num_seqs": 1,
+                "max_model_len": 4096,
+                "max_num_batched_tokens": 2048,
+                "gpu_memory_utilization": 0.90,
+                "skip_mm_profiling": True,
+            },
+        ],
+    },
 }
 
 

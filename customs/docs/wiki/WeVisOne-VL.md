@@ -19,13 +19,15 @@ may, because it is the parity oracle.
 | D | `pipeline.py`, both registries, `deploy/wevisone_vl.yaml`, `deploy/wevisone_vl_text_only.yaml` | done |
 | E | `model_extras/wevisone.py`, `_EXTRA_SPECS`, family rule, `_create_image_choice` stacked-mask extension | done |
 | F | Examples: `customs/wevisone/` (README, client, `samples.json`, generator, visualize, serve/run scripts) | done |
-| G | Tests: parsers, feature bridge, decoder mask post-processing, stage bridge, payload schema, output modality, serving choice, pipeline/registry, golden parity | done (CPU) |
-| — | L2 online-serving e2e, L4 expansion, Buildkite job wiring, GPU runtime parity | **not done** (no vllm runtime on this host) |
+| G | Tests: parsers, feature bridge, decoder mask post-processing, stage bridge, payload schema, output modality, serving choice, pipeline/registry, golden parity | done (CPU), verified in docker: 224 passed / 8 deselected, golden parity 4 passed |
+| G2 | e2e serving tests + shared mask-response assertion: `tests/e2e/online_serving/test_wevisone_vl.py` (2 cases), `test_wevisone_vl_expansion.py` (3 cases), `tests/helpers/assertions.py::assert_chat_mask_choices` | **executed on 2x RTX 3060**: `test_wevisone_vl.py` 2 passed in 184.54 s (matting 109.74 s, server startup 98.036 s). The expansion file is authored and lint-clean but not yet executed |
+| G3 | Buildkite wiring: registry keys + L2/L4 steps | done — `check_buildkite.py` exits 0, collection counts match the steps. The `core_model` L1 step was removed: `core_model` runs patch every stage to `load_format: dummy`, so the e2e is `advanced_model` only |
+| — | GPU runtime parity (hook deltas, mask PSNR) | **not done** — L1 + golden parity run in docker via `vllm/vllm-openai:latest`; hook-parity deltas and mask PSNR vs the reference are still unmeasured |
 
-All new files are `py_compile`-clean, SPDX-header-clean, and within the 120-column limit;
-`tools/pre_commit/check_test_marks.py` and `check_spdx_header.py` pass repo-wide. CPU unit tests that
-do not import `vllm` run on this host (33 passed); everything that imports `vllm` could only be
-verified by hand with stubbed modules, so the pytest run must happen in docker.
+All new files are `py_compile`-clean, SPDX-header-clean, and within the 120-column limit; the four
+`tools/pre_commit` checks (`check_spdx_header.py`, `check_test_marks.py`, `check_buildkite.py`,
+`check_forbidden_imports.py`) exit 0. The whole L1 CPU set now runs in docker — 224 passed / 8 deselected
+with `bash customs/wevisone/run_tests.sh`, and golden parity 4 passed against the committed fixture.
 
 ## Architecture
 
@@ -70,6 +72,11 @@ hands everything to stage 1 as the `segmentation` payload group. Stage 1 decodes
    tensor per request** under `image`; each image part carries `mask_index`, and mask `i` pairs with box
    `i` (positional pairing, box order == mask order). Dict-valued payload keys are rejected by
    `split_mapping_outputs`, which is why masks are one stacked tensor rather than a dict.
+   Both stages declare a `final_output`, so a non-streaming response emits **one choice per final output
+   type**: the text choice carries the structured answer as a plain string, the image choice carries the
+   mask parts. A client must therefore collect parts across all choices rather than assume one mixed
+   part list. `mask_index` is only set for stacked multi-mask responses, so a single-mask payload has no
+   `mask_index` and keeps its own rank — `assert_chat_mask_choices` allows exactly that case.
 6. **`segmentation` is a non-drainable modality.** It is an internal stage-to-stage contract and is
    never drained to a client; `NON_DRAINABLE_MODALITIES` keeps its keys alive for the decoder stage, and
    the client receives the decoded masks under `IMAGE`. `segmentation.t_seg` accumulates by `CONCAT_DIM0`
@@ -126,7 +133,9 @@ hands everything to stage 1 as the `segmentation` payload group. Stage 1 decodes
   bridge 9, pixel-decoder masks 10, golden parity 4.
 - Runtime parity has not been executed on this host: the docker image is unavailable (Docker Hub 401)
   and the host interpreter has no `vllm`, so hook-parity deltas and mask PSNR against the reference are
-  still unmeasured. Record them in Findings when the docker run happens.
+  still unmeasured. Record them in Findings when the docker run happens. The serving e2e itself has since
+  been executed in the local `vllm/vllm-openai:latest` image on 2x RTX 3060 (see Testing & CI); hook
+  deltas and mask PSNR remain the unmeasured part.
 
 ## Risks
 
@@ -167,6 +176,9 @@ hands everything to stage 1 as the `segmentation` payload group. Stage 1 decodes
 | L1 | `tests/engine/test_output_modality.py` (segmentation cases) | `core_model and cpu` | yes — engine step |
 | L1 | `tests/entrypoints/openai_api/test_serving_chat_mask_choices.py` | `core_model and cpu` | yes — entrypoints step |
 | L1 | `tests/model_extras/test_model_extras.py` (WeVisOne cases) | `core_model and cpu` | yes — "Other Test" step |
+| L2 | `tests/e2e/online_serving/test_wevisone_vl.py`, mask/box pairing (full pipeline) | `advanced_model`, `omni`, `hardware_test` `["H100", "RTX3060"]`/MI325, 2 cards | yes — `advanced_model and cuda` step in `test-merge.yml`; **no `core_model` step**, because dummy weights cannot produce a box span |
+| L2 | same file, text-only pipeline (sidecar never loaded) | `advanced_model`, `omni`, `["H100", "RTX3060"]`/MI325, 1 card | yes — `test-merge.yml` only |
+| L4 | `tests/e2e/online_serving/test_wevisone_vl_expansion.py` (3 cases) | `full_model`, `omni`, `hardware_test` `["H100", "B200"]`/MI325, 2 cards | yes — nightly 2-GPU L4 step |
 | local | `tests/model_executor/models/wevisone/test_wevisone_golden_parity.py` | `local_model and cpu` | no — `extra_repos/` is git-ignored, skipped without the fixture |
 
 Local commands (docker, `. /workspace/.venv/bin/activate`):
@@ -182,8 +194,44 @@ pytest -sv tests/model_extras/test_model_extras.py -m 'core_model and cpu'
 # Golden parity (needs the reference checkpoint + fixture; add -m 'local_model and cpu')
 WEVISONE_MODEL_DIR=extra_repos/WeVisOne-VL-4B WEVISONE_GOLDEN_DIR=customs/wevisone/golden \
   pytest -sv tests/model_executor/models/wevisone/test_wevisone_golden_parity.py \
-  -m 'local_model and cpu' --run-level 'local_model'
+  -m 'local_model and cpu'
+
+# L2 online serving (two GPUs for the full pipeline, one for the text-only case)
+WEVISONE_MODEL_PATH=/path/to/WeVisOne-VL-4B \
+  pytest -s -v tests/e2e/online_serving/test_wevisone_vl.py \
+  -m 'advanced_model and omni and cards_2' --run-level advanced_model
+
+# L4 expansion, CI-like selection
+VLLM_WORKER_MULTIPROC_METHOD=spawn HF_HUB_DOWNLOAD_TIMEOUT=300 \
+  pytest -s -v tests/e2e/online_serving/test_wevisone_vl_expansion.py \
+  -m 'full_model and H100 and B200 and omni and cards_2' --run-level full_model
 ```
+
+`--run-level` only accepts `core_model`/`advanced_model`/`full_model` — it selects the assertion
+strictness of the runtime helpers, not marker-based collection, so `local_model` tests are selected
+with `-m` alone.
+
+One-shot runner (wraps `customs/wevisone/docker_run.sh`, which mirrors
+`customs/qwen_drive/docker_run.sh` but overrides `--entrypoint bash` because
+`vllm/vllm-openai` has `ENTRYPOINT ["vllm","serve"]`):
+
+```bash
+bash customs/wevisone/run_tests.sh                                    # L1 CPU set, GPU 0
+WVS_MARKERS='local_model and cpu' bash customs/wevisone/run_tests.sh \
+    tests/model_executor/models/wevisone/test_wevisone_golden_parity.py
+WVS_IMAGE=vllm/vllm-openai:latest bash customs/wevisone/run_tests.sh  # when the builder image is absent
+
+# e2e: the test starts its own server, so WVS_GPUS must cover the pipeline topology
+bash customs/wevisone/run_e2e_test.sh                                 # L2 baseline (WVS_GPUS defaults to device=0,1)
+WVS_IMAGE=vllm/vllm-openai:latest bash customs/wevisone/run_e2e_test.sh
+WVS_LEVEL=full_model bash customs/wevisone/run_e2e_test.sh \
+    tests/e2e/online_serving/test_wevisone_vl_expansion.py
+```
+
+Verified on this machine (image `vllm/vllm-openai:latest`, shared `.venv`, GPU 0 pinned):
+**224 passed, 8 deselected** for the L1 set, and **4 passed** for golden parity against the
+committed fixture. `run_e2e_test.sh` is executable and `bash -n` clean but has **not been executed** —
+the e2e tests need GPUs and the model weights.
 
 CI-like selection (the four L1 steps in `.buildkite/cuda/test-ready.yml`, verbatim):
 
@@ -200,9 +248,28 @@ Prerequisites for the L1 steps: `vllm` + `vllm_omni` importable, `msgspec` (for
 `tools/pre_commit/check_test_marks.py` passing for the new files (CI-level `core_model` plus the `cpu`
 platform mark). No GPU is required; the tests never request `omni_runner`/`online_client`.
 
-Buildkite wiring is not yet added: `omni_wevisone_vl_function` in
-`.buildkite/common/ci_source_file_dependencies.yml` and the L2/L4 steps are still open, so the new files
-are collected by the generic L1 steps only.
+Prerequisites for the e2e steps: model weights (`WEVISONE_MODEL_PATH`, default
+`tencent/WeVisOne-VL-4B`, or an HF download), `mask_decoder.pt` for the full pipeline, the GPUs the
+deploy yaml names (`wevisone_vl.yaml` = devices 0 and 1, `wevisone_vl_text_only.yaml` = one), and the
+test starts its own server through the `omni_server` fixture.
+
+Buildkite wiring for the e2e files:
+- `.buildkite/common/ci_source_file_dependencies.yml` — anchor `x-wevisone-vl: &wevisone_vl` (the
+  WeVisOne package, stage input processor, `model_extras/wevisone.py`, the three registries,
+  `data_entry_keys.py`, `outputs/output_modality.py`, both deploy yamls) with keys
+  `omni_wevisone_vl_function` (anchor + the L1 test files + the L2 file) and `omni_wevisone_vl_expansion`
+  (anchor + the L4 file). `tests/helpers/assertions.py` is covered by `source_filter_fallback`.
+- Steps: `Omni · WeVisOne-VL Test` in `.buildkite/cuda/test-ready.yml` (`-m 'core_model'`,
+  `timeout_in_minutes: 40`, `mirror_hardwares: h100_2`), the same label in `test-merge.yml`
+  (`-m 'advanced_model and cuda' --run-level 'advanced_model'`, 45 min), and `omni_wevisone_vl_expansion`
+  added to the existing 2-GPU L4 step in `test-nightly.yml`.
+- Collection measured in docker: ready `1/2 tests collected (1 deselected)`, merge `2`, nightly `3`.
+  `check_buildkite.py` exits 0 for the four changed pipeline files — note it must be given the files
+  explicitly; called with no arguments it validates nothing and still exits 0.
+- No weekly change: the dfx invalid-param steps already cover `tests/dfx/reliability/invalid_param_test/`
+  through `reliability_invalid_param_h100/_l4`, and no WeVisOne dfx file was added because the task
+  validation lives client-side (`build_prompt`) and `extra_body` names are merged without validation —
+  see Findings.md.
 
 ## Sample generation
 
@@ -218,6 +285,7 @@ python customs/wevisone/generate_samples.py --only detection ocr
 python customs/wevisone/visualize.py --out /tmp/wevis-out       # overlay masks on the source image
 bash customs/wevisone/run_samples.sh                            # same, inside docker
 bash customs/wevisone/run_golden.sh                             # reference oracle -> golden fixture
+bash customs/wevisone/run_tests.sh                              # L1 CPU unit tests, inside docker
 ```
 
 Episode record: [E11 — WeVisOne-VL](episodes/E11-wevisone-vl.md).
