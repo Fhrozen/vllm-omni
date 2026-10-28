@@ -146,7 +146,7 @@ Scripts: `customs/qwen_drive/spikes/{s5_vllm_vlm.py,qd_probe.py,s2_tokenize_roun
   `ENTRYPOINT ["vllm","serve"]`, so the wrapper overrides `--entrypoint bash`; the shared `.venv` created by
   `customs/qwen_drive/setup_env.sh` is visible through the `/workspace` mount. Measured: L1 CPU
   **224 passed / 8 deselected** (`bash customs/wevisone/run_tests.sh`), golden parity **4 passed**, four
-  `tools/pre_commit` checks exit 0. Hook parity and mask PSNR vs the reference remain unmeasured.
+  `tools/pre_commit` checks exit 0. Hook parity and mask PSNR have since been measured (see below).
 - Pairing rule taken from the reference engine (`wevisone_vl/engine.py`): `count = min(len(boxes), t_seg rows)`
   with positional pairing of box `i` to query row `i`, so surplus `<OBJ>` rows are dropped rather than paired
   with invented boxes. Boxes are recorded only when followed by `<OBJ>` (`SEG_RE`, `SEG_SPECIAL_TOKENS = ("<OBJ>",)`);
@@ -180,7 +180,7 @@ Scripts: `customs/qwen_drive/spikes/{s5_vllm_vlm.py,qd_probe.py,s2_tokenize_roun
   `WEVISONE_MODEL_PATH=/workspace/extra_repos/WeVisOne-VL-4B`): `test_wevisone_vl.py` **2 passed in
   184.54 s**, matting case 109.74 s, server startup 98.036 s, stages `[0: 0.69 s, 1: 0.64 s]`, HTTP 200.
   The matting response was `<ref>the object</ref><box><88><255><462><815><OBJ></box>` with mask 0 gray
-  range 0-254. Hook-parity deltas and mask PSNR vs the reference are still unmeasured.
+  range 0-254. Re-run after the later edits: **2 passed in 218.37 s**.
 - Memory budget measured on a 12 GB card with the CI overlay (`gpu_memory_utilization: 0.90`,
   `skip_mm_profiling: true`, `max_model_len: 4096`, `max_num_seqs: 1`): bf16 weights 9.14-9.23 GiB, KV
   cache 1.12 GiB (8,176 tokens), peak activation 0.15 GiB, CUDA graph 0 GiB (`enforce_eager`), init 9.4 s.
@@ -227,8 +227,65 @@ Scripts: `customs/qwen_drive/spikes/{s5_vllm_vlm.py,qd_probe.py,s2_tokenize_roun
 - `ruff` must not run on `.sh` files — it parses them as Python and reports invalid syntax. Shell files are
   gated by `shellcheck`; shellcheck is unavailable on this host, so `bash -n` is the local substitute.
 - Container facts: each `docker run --rm` is fresh, so `pip install` must be chained with the gate in the
-  same command; `python` is not on PATH (use `python3`); `git` exists on the host but not in the image;
-  `.ruff_cache` is root-owned, so run `uvx ruff@0.14.10 ... --no-cache`.
+  same command; `python` is only on PATH after `. .venv/bin/activate`, and pytest must then be run as
+  `python -m pytest` — plain `pytest` resolves to the system interpreter and cannot see packages installed
+  into `/workspace/.venv` (`ImportError: Error importing plugin "tests.helpers.fixtures.clean": No module
+  named 'aenum'`); `git` exists on the host but not in the image; `.ruff_cache` is root-owned, so run
+  `uvx ruff@0.14.10 ... --no-cache`. A standalone script under `customs/` needs `PYTHONPATH=/workspace`
+  because python puts the script's own directory on `sys.path`, not the working directory.
+- Hook parity measured on 2x RTX 3060 (`test_wevisone_hook_parity.py`, 4 passed). CPU dual-run reproduces
+  the reference maps exactly (`np.array_equal` on all four layers, canvas, and hook input shape). GPU
+  dual-run, fp32 with TF32 off, grid 58x88: mean-abs-difference relative to map scale 1.78e-5 (layer 5),
+  1.78e-6 (11), 4.63e-6 (17), 7.78e-6 (23); max/scale 0.0099 / 0.0132 / 0.0133 / 0.0852; correlation
+  1.0000 for all four. Masks decoded from the two towers differ by 77.7 dB PSNR (mean abs diff 2.63e-5);
+  each tower against the golden fixture is 26.8 / 26.7 dB, which is the bf16-vs-fp32 recording difference
+  and sits well inside the 0.02 mean-mask contract. Cross-loaded decoder parity is bit-identical.
+- TF32 is on by default in the serving path: after `import vllm`, `torch.backends.cuda.matmul.allow_tf32`
+  is False but `cudnn.allow_tf32` is True, so the fp32 `Conv3d` in `patch_embed` runs in TF32. The same
+  per-layer deltas with TF32 on are 6e-4 to 3.9e-2, so the test pins both flags off and the capture
+  harness records the TF32 state in each manifest. Correlation is the discriminator: a wrong hook point or
+  a row-major un-shuffle drops it to 0.1-0.5, while the magnitude alone cannot tell noise from a bug.
+- Only the merger hooks fire on the port. `Qwen3_VisionBlock` carries `@support_torch_compile(...)`, whose
+  `__call__` calls `self.forward(...)` directly and bypasses `nn.Module._call_impl`, so
+  `register_forward_pre_hook` never fires on vision blocks (confirmed on all eight probed blocks). Merger
+  hooks do fire, which is where the port captures.
+- `FusedMMInputNorm` expects unrescaled bytes (0-255), not the processor's already-rescaled output: its
+  affine form is `(x * rescale_factor - mean) / std`, i.e. weight 0.007843137 and bias -1.0. Feeding it the
+  processor's `[0,1]` tensor gives `0.0078 * raw - 1` instead of `2 * raw - 1` — an error of ~1.99 that
+  looks like a kernel bug. With the correct input the kernel matches the processor to 1.19e-7.
+  `build_mm_input_norm` returns `IdentityInputNorm` unless `mm_config.mm_device_do_normalize` is set, so the
+  default serving path passes the processor's normalized output straight through. The norm must be built
+  inside `set_current_vllm_config` (CustomOp dispatch reads the ambient config) and its buffers are
+  registered on CPU, so `.to(device)` is required before the Triton path.
+- `VisualFeatureCapture` resolves `model.visual`, so it needs a model-shaped owner; passing a bare vision
+  tower raises "cannot locate qwen visual module for feature capture". Its hook input is `[N, 1, C]` on the
+  port (vllm inserts the singleton sequence dim before the block loop) and `[N, C]` on HF, so capture folds
+  the singleton dim — a no-op on the reference side.
+- The port cannot run on CPU at all: the CPU attention backend returns None (`Invalid attention backend for
+  None`), and `FusedMMInputNorm` / `ApplyRotaryEmb` dispatch to their CUDA paths whenever a GPU is visible.
+  A CPU dual-run therefore compares the capture logic against reference fixtures, not the ported model.
+  `init_distributed_environment` also cannot use `gloo` on CPU and `env://` needs `MASTER_ADDR`; use
+  `tcp://127.0.0.1:2951x`.
+- Memory on a 12 GiB card: a full fp32 model OOMs during the reference run, and building the port model on
+  the default CUDA device allocates 11.42 GiB before any forward (build on CPU then `.to("cuda")` lands at
+  9.11 GiB). The parity test loads only the vision tower (~1.55 GiB fp32 each, ~3.6 GiB for both plus the
+  decoder). The decoder forward must run under `torch.no_grad()` — autograd at `cnn_image_size=1024` reaches
+  11.3 GiB. Reference and port cannot co-reside in bf16, so a dual run is two sequential processes.
+- `grid_hw` must reach `decoder.forward` as a 2-tuple of ints (or a shape-`(2,)` tensor): `forward` compares
+  `tuple(visual_features_2d[0].shape[-2:])` against it, so a shape-`(1, 2)` tensor raises "Boolean value of
+  Tensor with more than one value is ambiguous". `_hw_pair` normalizes this on the serving path.
+- `Qwen3_VisionTransformer.__init__` takes `(vision_config, norm_eps, ...)`; passing a `VllmConfig` as the
+  second positional argument breaks `nn.LayerNorm` ("argument 'eps' must be float, not VllmConfig").
+  `ensure_model_parallel_initialized(1, 1)` must run inside `set_current_vllm_config`, otherwise
+  `get_current_vllm_config()` raises "Current vLLM config is not set".
+- Closed hypotheses that looked like bugs and were verified identical: `gelu_pytorch_tanh` activation
+  (maxdiff 0.0 over 100k values), the rotary formula (`ApplyRotaryEmb.forward_static` chunks into halves of
+  32 and is mathematically equal to HF's full-64 fp32 version; bit-identical cos/sin in the TF32-off probe),
+  and the position-id path (`rot_pos_ids` matches `get_vision_position_ids`; the earlier 4/1276 agreement was
+  an artifact of calling the class method that uses the merged grid and returns `(3, N)`).
+- Mypy gate note: `pytest.skip()` is not `NoReturn` under `mypy --follow-imports skip`, so
+  `if x is None: pytest.skip(...)` does not narrow `x`. Either assert non-None or end the guard with
+  `return`; the hook-parity test uses both, and the file is now clean under the gate.
 - Debugging lesson: piping docker output through `tail -N` truncates the failure lines and produces false
   conclusions. Redirect to a log file under `/workspace` and grep it for the short test summary plus
   `AssertionError|ValueError|RuntimeError|FAILED|passed|failed`.

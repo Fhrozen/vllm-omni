@@ -19,14 +19,14 @@ may, because it is the parity oracle.
 | D | `pipeline.py`, both registries, `deploy/wevisone_vl.yaml`, `deploy/wevisone_vl_text_only.yaml` | done |
 | E | `model_extras/wevisone.py`, `_EXTRA_SPECS`, family rule, `_create_image_choice` stacked-mask extension | done |
 | F | Examples: `customs/wevisone/` (README, client, `samples.json`, generator, visualize, serve/run scripts) | done |
-| G | Tests: parsers, feature bridge, decoder mask post-processing, stage bridge, payload schema, output modality, serving choice, pipeline/registry, golden parity | done (CPU), verified in docker: 224 passed / 8 deselected, golden parity 4 passed |
-| G2 | e2e serving tests + shared mask-response assertion: `tests/e2e/online_serving/test_wevisone_vl.py` (2 cases), `test_wevisone_vl_expansion.py` (3 cases), `tests/helpers/assertions.py::assert_chat_mask_choices` | **executed on 2x RTX 3060**: `test_wevisone_vl.py` 2 passed in 184.54 s (matting 109.74 s, server startup 98.036 s). The expansion file is authored and lint-clean but not yet executed |
+| G | Tests: parsers, feature bridge, decoder mask post-processing, stage bridge, payload schema, output modality, serving choice, pipeline/registry, golden parity | done (CPU), verified in docker: 311 passed / 8 deselected in the scoped set, golden parity 4 passed |
+| G2 | e2e serving tests + shared mask-response assertion: `tests/e2e/online_serving/test_wevisone_vl.py` (2 cases), `test_wevisone_vl_expansion.py` (4 cases), `tests/helpers/assertions.py::assert_chat_mask_choices` | **executed on 2x RTX 3060**: `test_wevisone_vl.py` 2 passed in 186.68 s (matting 109.74 s, server startup 98.036 s); the expansion file 4 passed in 121.28 s, including the box-less case that previously hung until the connector input-wait timeout |
 | G3 | Buildkite wiring: registry keys + L2/L4 steps | done — `check_buildkite.py` exits 0, collection counts match the steps. The `core_model` L1 step was removed: `core_model` runs patch every stage to `load_format: dummy`, so the e2e is `advanced_model` only |
-| — | GPU runtime parity (hook deltas, mask PSNR) | **not done** — L1 + golden parity run in docker via `vllm/vllm-openai:latest`; hook-parity deltas and mask PSNR vs the reference are still unmeasured |
+| G4 | Hook parity: `tests/model_executor/models/wevisone/test_wevisone_hook_parity.py` + `customs/wevisone/parity_capture.py` | **executed on 2x RTX 3060**: 4 passed. CPU dual-run reproduces the reference maps exactly; GPU dual-run matches within fp32 noise (mean/scale 1.8e-5 / 1.8e-6 / 4.6e-6 / 7.8e-6, corr 1.0000) and the masks decoded from both towers differ by 77.7 dB PSNR |
 
 All new files are `py_compile`-clean, SPDX-header-clean, and within the 120-column limit; the four
 `tools/pre_commit` checks (`check_spdx_header.py`, `check_test_marks.py`, `check_buildkite.py`,
-`check_forbidden_imports.py`) exit 0. The whole L1 CPU set now runs in docker — 224 passed / 8 deselected
+`check_forbidden_imports.py`) exit 0. The whole L1 CPU set now runs in docker — 311 passed / 8 deselected
 with `bash customs/wevisone/run_tests.sh`, and golden parity 4 passed against the committed fixture.
 
 ## Architecture
@@ -139,8 +139,10 @@ hands everything to stage 1 as the `segmentation` payload group. Stage 1 decodes
 
 ## Risks
 
-- Hook parity is unmeasured on GPU. If the captured features differ from the reference, every tolerance
-  in the parity test has to be re-derived; the CPU tests only prove the shape/contract logic.
+- Hook parity is measured and its tolerances are set to the observed noise floor (mean <= 5e-5 * scale,
+  max <= 0.15 * scale, mask PSNR >= 60 dB). GPU kernels are not bit-reproducible, so the test compares
+  relative statistics rather than exact values; a different card, dtype, or TF32 setting can move the
+  numbers and would require the thresholds to be re-derived.
 - Stage 1 needs an fp32 forward at `cnn_image_size=1024`; the alpha cascade is the memory hotspot
   (`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` is set in the deploy yaml for this reason).
 - Box/mask positional pairing assumes the VLM emits boxes in the same order the decoder receives query
@@ -153,7 +155,7 @@ hands everything to stage 1 as the `segmentation` payload group. Stage 1 decodes
 
 1. CPU unit tests (see Testing & CI).
 2. Hook parity gate — one image, captured pre-merger features and `<OBJ>` hidden states vs the reference
-   hooks; record deltas here, then set tolerances from them.
+   hooks; deltas recorded in Findings and the tolerances set from them.
 3. Golden parity: `bash customs/wevisone/run_golden.sh` — text exact, boxes within 0.001, mean mask diff
    within 0.02.
 4. Manual API check: `bash customs/wevisone/serve.sh` + `customs/wevisone/openai_request_example.py` with
@@ -180,6 +182,7 @@ hands everything to stage 1 as the `segmentation` payload group. Stage 1 decodes
 | L2 | same file, text-only pipeline (sidecar never loaded) | `advanced_model`, `omni`, `["H100", "RTX3060"]`/MI325, 1 card | yes — `test-merge.yml` only |
 | L4 | `tests/e2e/online_serving/test_wevisone_vl_expansion.py` (3 cases) | `full_model`, `omni`, `hardware_test` `["H100", "B200"]`/MI325, 2 cards | yes — nightly 2-GPU L4 step |
 | local | `tests/model_executor/models/wevisone/test_wevisone_golden_parity.py` | `local_model and cpu` | no — `extra_repos/` is git-ignored, skipped without the fixture |
+| local | `tests/model_executor/models/wevisone/test_wevisone_hook_parity.py` | `local_model`, `cpu` + `hardware_test` `RTX3060` | no — needs the checkpoint and the CPU fixtures under `customs/wevisone/golden/hooks/cpu/` |
 
 Local commands (docker, `. /workspace/.venv/bin/activate`):
 
@@ -229,9 +232,20 @@ WVS_LEVEL=full_model bash customs/wevisone/run_e2e_test.sh \
 ```
 
 Verified on this machine (image `vllm/vllm-openai:latest`, shared `.venv`, GPU 0 pinned):
-**224 passed, 8 deselected** for the L1 set, and **4 passed** for golden parity against the
-committed fixture. `run_e2e_test.sh` is executable and `bash -n` clean but has **not been executed** —
-the e2e tests need GPUs and the model weights.
+**79 passed** for `tests/model_executor/models/wevisone` plus `test_wevisone.py`, which includes the
+hook-parity file (4 passed, GPU test executed on GPU 0); golden parity **4 passed** against the
+committed fixture; the L2 e2e **2 passed in 218.37 s** and the L4 expansion **4 passed**.
+
+Two container-execution details matter for these runs:
+- use `python -m pytest` after `. .venv/bin/activate`; plain `pytest` resolves to the system interpreter,
+  which cannot see packages installed into `/workspace/.venv` (`ImportError: Error importing plugin
+  "tests.helpers.fixtures.clean": No module named 'aenum'`);
+- a standalone script under `customs/` needs `PYTHONPATH=/workspace`, because python puts the script's own
+  directory on `sys.path` rather than the working directory.
+
+The hook-parity fixtures are written by `customs/wevisone/parity_capture.py`, one process per side — the
+reference model and the port cannot co-reside on a 12 GiB card in bf16, so a dual run is two sequential
+processes writing into `customs/wevisone/golden/hooks/cpu/<side>/`.
 
 CI-like selection (the four L1 steps in `.buildkite/cuda/test-ready.yml`, verbatim):
 
